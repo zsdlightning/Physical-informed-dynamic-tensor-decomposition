@@ -71,3 +71,47 @@ def generate_Lapla(data_dict):
     W = Wtril + Wtril.T
     D = torch.diag(W.sum(1))
     return W-D
+
+def generate_state_space_Matern_23(data_dict,hyper_dict):
+    '''
+    For matern 3/2 kernel with given hyper-paras and data,
+    generate the parameters of coorspoding state_space_model,
+    recall: for each dim of all-node-embedding, the form of state_space_model is iid (independent & identical)
+    
+    input: data_dict, hyper_dict 
+    output: trans mat: F,  stationary covarianc: P_inf
+
+    '''
+
+    D = data_dict['num_node']
+
+    # hyper-para of kernel
+    lengthscale = hyper_dict['ls']
+    variance = hyper_dict['var']
+    
+    lamb = np.sqrt(3)/lengthscale
+    
+    # F = torch.zeros((2*D, 2*D), device=data_dict['device'])
+    F = np.zeros((2*D, 2*D))
+    F[:D,:D] = utils.generate_Lapla(data_dict)
+    F[:D,D:] = np.eye(D)
+    F[D:,:D] = -np.square(lamb) * np.eye(D)
+    F[D:,D:] = -2 * lamb *  np.eye(D)
+
+    Q_c = 4 * lamb**3 * variance * np.eye(D)
+    L = np.zeros((2*D, D)) 
+    L[D:,:] = np.eye(D)
+    Q = - np.matmul(np.matmul(L,Q_c),L.T)
+    
+
+    P_inf = Lyapunov_slover(F,Q)
+
+    return torch.tensor(F,device=data_dict['device']), torch.tensor(P_inf,device=data_dict['device'])
+
+
+def Lyapunov_slover(F,Q):
+    '''
+    For the given mix-process SDE, solve correspoding Lyapunov to get P_{\inf}  
+    '''
+    
+    return linalg.solve_continuous_lyapunov(F, Q)
