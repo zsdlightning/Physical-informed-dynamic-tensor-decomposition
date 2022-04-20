@@ -15,8 +15,15 @@ class dataset_SVI_base(Dataset):
     def __len__(self):
         return self.length 
 
-class dataset_diffusion_base(Dataset):
+class Dataset_diffusion_base(Dataset):
 
+    '''
+    wrap the specifical fold of raw-data
+    '''
+
+    def __init__(self,raw_data,fold=0):
+    
+    
     
     def __getitem__(self, index):
         return self.x[index,:],self.y[index]

@@ -73,7 +73,7 @@ def generate_Lapla(ndims,ind):
     D = torch.diag(W.sum(1))
     return W-D
 
-def generate_state_space_Matern_23(data_dict,hyper_dict,fold=0):
+def generate_state_space_Matern_23(data_dict,hyper_dict):
     '''
     For matern 3/2 kernel with given hyper-paras and data,
     generate the parameters of coorspoding state_space_model,
@@ -86,17 +86,18 @@ def generate_state_space_Matern_23(data_dict,hyper_dict,fold=0):
 
     ndims = data_dict['ndims']
     D = data_dict['num_node']
-    ind = data_dict['data'][fold]['tr_ind']
+    ind = data_dict['tr_ind']
 
     # hyper-para of kernel
     lengthscale = hyper_dict['ls']
     variance = hyper_dict['var']
+    c = hyper_dict['c'] # diffusion rate 
     
     lamb = np.sqrt(3)/lengthscale
     
     # F = torch.zeros((2*D, 2*D), device=data_dict['device'])
     F = np.zeros((2*D, 2*D))
-    F[:D,:D] = utils.generate_Lapla(ndims,ind)
+    F[:D,:D] = utils.generate_Lapla(ndims,ind)*c
     F[:D,D:] = np.eye(D)
     F[D:,:D] = -np.square(lamb) * np.eye(D)
     F[D:,D:] = -2 * lamb *  np.eye(D)
