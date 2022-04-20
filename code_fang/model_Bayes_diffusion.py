@@ -21,14 +21,13 @@ class Bayes_diffu_tensor():
         self.a0 = hyper_dict['a0']
         self.b0 = hyper_dict['b0']
         
-        
-
         # data-dependent paras
         self.data_dict = data_dict
         
         self.ind_tr = data_dict['tr_ind']
         self.y_tr = data_dict['tr_y'].to(self.device) # N*1
         self.N = len(data_dict['y_tr'])
+
         self.ndims = data_dict['ndims']
         self.nmod = len(self.ndims)
         self.num_nodes = sum(self.ndims)
@@ -56,8 +55,7 @@ class Bayes_diffu_tensor():
         # self.msg_U_llk_m = [torch.rand(ndim,self.R_U,self.N_time).double().to(self.device) \
         #     for ndim in self.ndims] 
         
-        self.msg_U_llk_v = [torch.ones(ndim,self.R_U,self.N_time).double().to(self.device) \
-            for ndim in self.ndims] 
+
         
         self.msg_tau_a = torch.ones(self.N_time,1).to(self.device)
         self.msg_tau_b = torch.ones(self.N_time,1).to(self.device)
@@ -106,23 +104,14 @@ class Bayes_diffu_tensor():
         self.time_data_table_tr = utils.build_time_data_table(self.train_time_ind) 
         self.time_data_table_te = utils.build_time_data_table(self.test_time_ind) 
         
-        
-        self.ind_T = None
-        self.y_T = None
-        
-        self.Z_T = None
-        self.Z_2_T = None
-        
 
 def msg_update_U_llk(self,T):
     
     # retrive the observed entries at T
-    eind_T = self.time_data_table_tr[T] # id of obseved entries at this time-stamp
+    eind_T = self.time_data_table_tr[T] # id of observed entries at this time-stamp
     N_T = len(eind_T) 
     ind_T = self.ind_tr[eind_T]
-    y_T = self.y_tr[eind_T]
-    
-    
+    y_T = self.y_tr[eind_T].squeeze()
     
     uid_table, _ = build_id_key_table(self.nmod,ind_T) # get the id of associated nodes
     self.uid_table_T = uid_table
@@ -133,24 +122,41 @@ def msg_update_U_llk(self,T):
     
     U_llk_del_T_m,U_llk_del_T_v = self.arrange_U_llk(U_llk_del_T) # arrange U as mode-wise
     
-    E_z_del, E_z_2_del = self.moment_product_U_del(U_llk_del_T_m,U_llk_del_T_v) # first and second moment of 
+    E_z_del, E_z_2_del = self.moment_product_U_del(U_llk_del_T_m,U_llk_del_T_v) # first and second moment of CP-pred
     E_tau_del = self.msg_tau_a_del_T[T]/self.msg_tau_b_del_T[T]
     
-    log_zn = self.ADF_update_llk(U_llk_del_T)
-    
+    log_Z = 0.5*N_T*torch.log(E_tau_del/2*np.pi) \
+        -  0.5*E_tau_del* ( (y_T*y_T).sum() - 2* (y_T*E_z_del).sum() + E_z_2_del.sum())
 
-def ADF_update_llk(self,U_llk_del_T):
-     
-    grads = torch.autograd.functional.jacobian(self.log_Z_llk, U_llk_del_T)     
-    
+    U_llk_del_grad = torch.autograd.grad(log_Z,U_llk_del_T)[0]
+    U_llk_del_m_grad = U_llk_del_grad[:self.num_nodes]
+    U_llk_del_v_grad = U_llk_del_grad[self.num_nodes:]
 
-    
+    # ADF update
+    U_llk_m_star = self.msg_U_llk_m_del[:,:,T] + self.msg_U_llk_v_del[:,:,T] * U_llk_del_m_grad
+    U_llk_v_star = self.msg_U_llk_v_del[:,:,T] 
+    - torch.square(self.msg_U_llk_v_del[:,:,T]) * (torch.square(U_llk_del_m_grad)-2*U_llk_del_v_grad) 
+
+    # msg update U_llk: f_star / f_del
+    msg_U_llk_v_inv = 1.0/U_llk_v_star - 1.0/self.msg_U_llk_v_del[:,:,T]
+    msg_U_llk_v_inv_m = torch.div(U_llk_m_star,U_llk_v_star) \
+                    - torch.div(self.msg_U_llk_m_del[:,:,T],self.msg_U_llk_v_del[:,:,T])
+
+    self.msg_U_llk_v[:,:,T] = 1.0/msg_U_llk_v_inv
+    self.msg_U_llk_m[:,:,T] = (1.0/msg_U_llk_v_inv) * msg_U_llk_v_inv_m
+
+
+    # we also update the tau here
+    a = 0.5*N_T + 1
+    b = 0.5*((y_T*y_T).sum() - 2* (y_T*E_z_del).sum() + E_z_2_del.sum()).detach()
+    self.msg_update_tau(self,a,b,T)
+
 def arrange_U_llk(self,U_llk_del_T):
-    # arrange_U_to_mode-wise for convinience in computing
+    # arrange_U_to_mode-wise for convenience in computing
     U_llk_del_T_m = U_llk_del_T[:self.num_nodes,:]
     U_llk_del_T_v = U_llk_del_T[self.num_nodes:,:]
     
-    # arrange_U_to_mode-wise for convinience in computing
+    # arrange_U_to_mode-wise for convenience in computing
     U_llk_del_T_m = []
     U_llk_del_T_v = []
     
@@ -167,7 +173,7 @@ def arrange_U_llk(self,U_llk_del_T):
         
         idx_start = idx_end
         
-    return 
+    return U_llk_del_T_m,U_llk_del_T_v
     
     
 def moment_product_U_del(self,U_llk_T_m,U_llk_T_v):
@@ -182,12 +188,13 @@ def moment_product_U_del(self,U_llk_T_m,U_llk_T_v):
 
         E_z = E_z*E_u
         E_z_2 = E_z_2*E_u_2  
-        
-    return E_z, E_z_2
-  
     
-def msg_update_U_trans(self,T,mode='forward'):
-    pass
+    if self.R_U>1:
+        return E_z.squeeze().sum(-1), E_z_2.squeeze().sum(-1)
+    else:
+        return E_z.squeeze(), E_z_2.squeeze()
+    
+
 
 def msg_update_tau(self,a,b,T):
     self.msg_tau_a[T] = a
@@ -277,7 +284,65 @@ def post_update_tau(self):
     self.post_b = self.b0 + self.msg_tau_n.sum()  
         
         
+def msg_update_U_trans(self,T,mode='forward'):
+    
+    time_gap = self.time_uni[T+1] - self.time_uni[T]
+    A_T = torch.matrix_exp(self.F * time_gap)
+    Q_T = self.P_inf - self.P_inf @ A_T @ self.P_inf.T
+
+    for r in range(self.R_U):
+        # msg from the left (from U_T)
+        msg_m_l = self.msg_U_f_m_del[:,r,T]
+        msg_v_l = self.msg_U_f_v_del[:,r,T]
         
+        # msg from the right (from U_{T+1})
+        msg_m_r = self.msg_U_b_m_del[:,r,T+1]
+        msg_v_r = self.msg_U_b_v_del[:,r,T+1]
+
+        if mode=='forward':
+        #  in the forward pass, we only update the msg to right (U_{T+1})
+            msg_m_r.requires_grad=True 
+            msg_v_r.requires_grad=True 
+            target_m = msg_m_r
+            target_v = msg_v_r
+        else:
+        # in the backward pass, we only update the msg to left (U_{T})
+            msg_m_l.requires_grad=True 
+            msg_v_l.requires_grad=True 
+            target_m = msg_m_l
+            target_v = msg_v_l            
+
+        mu = (A_T @ msg_m_l.view(-1,1)).squeeze() # num_node * 1
+        sigma = torch.diag(msg_v_r) + Q_T + A_T @ torch.diag(msg_v_l) @ A_T.T
+        sample = msg_m_r
+
+        # compute log-Z
+        dist = torch.distributions.multivariate_normal.MultivariateNormal(mu, torch.diag(sigma))
+        log_Z_trans = dist.log_prob(sample)
+        log_Z_trans.backward()
+
+        # get grad and ADF update 
+        target_m_grad = target_m.grad
+        target_v_grad = target_v.grad
+
+        target_m = target_m.detach()
+        target_v = target_v.detach()
+
+        target_m_star = target_m + target_v * target_m_grad
+        target_v_star = target_v - torch.square(target_v) * (torch.square(target_m_grad) - 2*target_v_grad)
+
+        # update the factor: msg_new = msg_star / msg_old
+        target_v_inv_new = 1.0/target_v_star - 1.0/target_v
+        target_v_inv_m_new = torch.div(target_m_star/target_v_star) -torch.div(target_m/target_v)
+
+        if mode=='forward':
+            self.msg_U_b_v_del[:,r,T+1] = 1.0/target_v_inv_new
+            self.msg_U_b_m_del[:,r,T+1] = (1.0/target_v_inv_new) * target_v_inv_new 
+        else:
+            self.msg_U_f_v_del[:,r,T] = 1.0/target_v_inv_new
+            self.msg_U_f_m_del[:,r,T] = (1.0/target_v_inv_new) * target_v_inv_new 
+
+
         
         
         
