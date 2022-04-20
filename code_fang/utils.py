@@ -41,17 +41,17 @@ def build_id_key_table(nmod,ind):
         
     return uid_table,data_table
 
-def generate_mask(data_dict):
-    num_node = data_dict['num_node']
-    device = data_dict['device']
-    nmod = data_dict['nmod']
+def generate_mask(ndims,ind):
+    num_node = sum(ndims)
+    nmod = len(ndims)
+    ind = torch.tensor(ind)
 
-    mask = torch.zeros((num_node, num_node), device=device)
+    mask = torch.zeros((num_node, num_node))
     for i in range(1, nmod):
-        row = np.sum(data_dict['ndims'][:i])
+        row = np.sum(ndims[:i])
         for j in range(i):
-            col = np.sum(data_dict['ndims'][:j])
-            indij = data_dict['ind'][:, [i, j]]
+            col = np.sum(ndims[:j])
+            indij = ind[:, [i, j]]
             indij = torch.unique(indij, dim=0).long()
             row_idx = row + indij[:, 0]
             col_idx = col + indij[:, 1]
@@ -59,14 +59,15 @@ def generate_mask(data_dict):
     return mask
 
 
-def generate_Lapla(data_dict):
+def generate_Lapla(ndims,ind):
     '''
     generate the fixed Laplacian mat of prior K-partition graph,
     which is defined by the observed entries in training set    
     '''
+    num_node = sum(ndims)
 
-    W_init = torch.ones((data_dict['num_node'], data_dict['num_node']), device=data_dict['device'])
-    mask = generate_mask(data_dict)
+    W_init = torch.ones((num_node, num_node))
+    mask = generate_mask(ndims,ind)
     Wtril = torch.tril(W_init)*mask
     W = Wtril + Wtril.T
     D = torch.diag(W.sum(1))
@@ -83,17 +84,20 @@ def generate_state_space_Matern_23(data_dict,hyper_dict):
 
     '''
 
+    ndims = data_dict['ndims']
     D = data_dict['num_node']
+    ind = data_dict['tr_ind']
 
     # hyper-para of kernel
     lengthscale = hyper_dict['ls']
     variance = hyper_dict['var']
+    c = hyper_dict['c'] # diffusion rate 
     
     lamb = np.sqrt(3)/lengthscale
     
     # F = torch.zeros((2*D, 2*D), device=data_dict['device'])
     F = np.zeros((2*D, 2*D))
-    F[:D,:D] = utils.generate_Lapla(data_dict)
+    F[:D,:D] = utils.generate_Lapla(ndims,ind)*c
     F[:D,D:] = np.eye(D)
     F[D:,:D] = -np.square(lamb) * np.eye(D)
     F[D:,D:] = -2 * lamb *  np.eye(D)
@@ -106,7 +110,7 @@ def generate_state_space_Matern_23(data_dict,hyper_dict):
 
     P_inf = Lyapunov_slover(F,Q)
 
-    return torch.tensor(F,device=data_dict['device']), torch.tensor(P_inf,device=data_dict['device'])
+    return torch.tensor(F,device=hyper_dict['device']), torch.tensor(P_inf,device=hyper_dict['device'])
 
 
 def Lyapunov_slover(F,Q):
