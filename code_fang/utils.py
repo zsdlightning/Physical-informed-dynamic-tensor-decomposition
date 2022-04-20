@@ -18,10 +18,10 @@ def build_time_data_table(time_ind):
 def build_id_key_table(nmod,ind):
     # build uid-data_key_table, implement by nested list
     
-    # given indices of unique rows of each mode/embed (store in uid_table)  
+    # store the indices of associated nodes in each mode over all obseved entries
     uid_table = []
     
-    # we could index which data points are associated through data_table
+    # store the indices of obseved entries for each node of each mode 
     data_table = []
 
     for i in range(nmod):
@@ -85,7 +85,7 @@ def generate_state_space_Matern_23(data_dict,hyper_dict):
     '''
 
     ndims = data_dict['ndims']
-    D = data_dict['num_node']
+    D = sum(ndims)
     ind = data_dict['tr_ind']
 
     # hyper-para of kernel
