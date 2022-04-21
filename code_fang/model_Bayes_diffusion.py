@@ -26,6 +26,10 @@ class Bayes_diffu_tensor():
         
         self.ind_tr = data_dict['tr_ind']
         self.y_tr = torch.tensor(data_dict['tr_y']).to(self.device) # N*1
+
+        self.ind_te = data_dict['te_ind']
+        self.y_te = torch.tensor(data_dict['te_y']).to(self.device) # N*1
+
         self.N = len(data_dict['tr_y'])
 
         self.ndims = data_dict['ndims']
@@ -75,7 +79,7 @@ class Bayes_diffu_tensor():
 
         for r in range(self.R_U):
             self.msg_U_b_m[:,r,self.N_time-1] = 0
-            self.msg_U_b_v[:,r,self.N_time-1] = torch.inf
+            self.msg_U_b_v[:,r,self.N_time-1] = 1e8
 
             self.msg_U_f_m[:,r,0] = 0
             self.msg_U_f_v[:,r,0] = torch.diag(self.P_inf)
@@ -193,23 +197,30 @@ class Bayes_diffu_tensor():
         
         
     def moment_product_U_del(self,ind_T,U_llk_T_m,U_llk_T_v):
-        # double check E_z_2
+        # double check E_z_2:done
         # compute first and second moments of \Hadmard_prod_{k \in given modes} u_k -CP based on the U_llk_del
         # based on the U_llk_del (calibrating factors)
-        E_z = U_llk_T_m[0][ind_T[:,0]] # N*R_u*1
-        E_z_2 = U_llk_T_v[0][ind_T[:,0]] + E_z * E_z # N*R_u*1
+
+        E_z = U_llk_T_m[0][ind_T[:,0]] # N*R_u
+        E_z_expand = E_z.unsqueeze(-1) # N*R_u*1
+        E_z_expand_T = torch.transpose(E_z_expand, dim0=1, dim1=2)# N*1*R_u
+        E_z_2 = torch.diag_embed(U_llk_T_v[0][ind_T[:,0]],dim1=1) + torch.bmm(E_z_expand,E_z_expand_T) # N*R_u*R_u
 
         for mode in range(1,self.nmod):
-            E_u = U_llk_T_m[mode][ind_T[:,mode]] # N*R_u*1
-            E_u_2 = U_llk_T_v[mode][ind_T[:,mode]] + E_u * E_u # N*R_u*1
+            E_u = U_llk_T_m[mode][ind_T[:,mode]] # N*R_u
+            E_u_expand = E_u.unsqueeze(-1) # N*R_u*1
+            E_u_expand_T = torch.transpose(E_u_expand, dim0=1, dim1=2)# N*1*R_u
+            E_u_2 = torch.diag_embed(U_llk_T_v[mode][ind_T[:,mode]],dim1=1) + torch.bmm(E_u_expand,E_u_expand_T) # N*R_u*R_u
 
             E_z = E_z*E_u
             E_z_2 = E_z_2*E_u_2  
         
+        # E(1^T z)^2 = trace (1*1^T* z^2)
         if self.R_U>1:
-            return E_z.squeeze().sum(-1), E_z_2.squeeze().sum(-1)
+            return E_z.squeeze().sum(-1), torch.einsum('bii->b',\
+                                            torch.matmul(E_z_2,torch.ones(self.R_U,self.R_U).double().to(self.device) ))
         else:
-            return E_z.squeeze(), E_z_2.squeeze()
+            return E_z.squeeze(), torch.einsum('bii->b',E_z_2)
         
 
 
@@ -218,9 +229,9 @@ class Bayes_diffu_tensor():
         self.msg_tau_b[T] = b
         
     def msg_update_tau_del(self,T):
-        # add prior db check
-        self.msg_tau_a_del_T[T] = self.msg_tau_a[:T].sum() + self.msg_tau_a[T+1:].sum() - (self.N_time-1)
-        self.msg_tau_b_del_T[T] = self.msg_tau_b[:T].sum() + self.msg_tau_b[T+1:].sum()
+        # add prior db check: done
+        self.msg_tau_a_del_T[T] = self.a0 + self.msg_tau_a[:T].sum() + self.msg_tau_a[T+1:].sum() - self.N_time
+        self.msg_tau_b_del_T[T] = self.b0 + self.msg_tau_b[:T].sum() + self.msg_tau_b[T+1:].sum()
 
     def msg_update_U_llk_del(self,T):
         # with message-passing framework, we just merge in-var-msg from all branches to get q_del
@@ -238,33 +249,21 @@ class Bayes_diffu_tensor():
         self.msg_U_llk_m_del[:,:,T] = (1.0/msg_U_llk_del_v_inv) * msg_U_llk_del_v_inv_m
                                 
         
-    def msg_update_U_trans_del(self,T):
-        # U_f_del = U_b + U_llk
-        # U_b_del = U_f + U_llk
+    def msg_update_U_trans_del(self,T, mode='forward'):
+        # U_f_del = U_b + U_llk : msg from var U_T to p(U_T | U_{T-1}) 
+        # (left direction msg, will used during the backward)
         
-        # double check
+        # U_b_del = U_f + U_llk : msg from var U_T to p(U_{T+1} | U_{T})  
+        # (right direction msg, will used during the forward)
+        
+        # double check:done
 
-        # backward
-        if T<self.N_time-1:
+        if mode=='forward' and T<self.N_time-1:
+            # for the last time var, we don't have to update its U_b_del (right-out msg)--we'll never use it
 
-            msg_U_f_del_v_inv = \
-                1.0/self.msg_U_b_v[:self.num_nodes,:,T] + 1.0/self.msg_U_llk_v[:,:,T]
-            msg_U_f_del_v_inv_m = \
-                torch.div(self.msg_U_b_m[:self.num_nodes,:,T],self.msg_U_b_v[:self.num_nodes,:,T])\
-                +torch.div(self.msg_U_llk_m[:,:,T],self.msg_U_llk_v[:,:,T])
-                
-            self.msg_U_f_v_del[:self.num_nodes,:,T] = 1.0/msg_U_f_del_v_inv
-            self.msg_U_f_v_del[self.num_nodes:,:,T] = self.msg_U_b_v[self.num_nodes:,:,T]
-            
-            self.msg_U_f_m_del[:self.num_nodes,:,T] = (1.0/msg_U_f_del_v_inv) * msg_U_f_del_v_inv_m
-            self.msg_U_f_m_del[self.num_nodes:,:,T] = self.msg_U_b_m[self.num_nodes:,:,T]
-        
-        # forward
-        
-            
-            # update backward msg of U
             msg_U_b_del_v_inv = \
                 1.0/self.msg_U_f_v[:self.num_nodes,:,T] + 1.0/self.msg_U_llk_v[:,:,T]
+            
             msg_U_b_del_v_inv_m = \
                 torch.div(self.msg_U_f_m[:self.num_nodes,:,T],self.msg_U_f_v[:self.num_nodes,:,T])\
                 +torch.div(self.msg_U_llk_m[:,:,T],self.msg_U_llk_v[:,:,T])
@@ -274,6 +273,27 @@ class Bayes_diffu_tensor():
             
             self.msg_U_b_m_del[:self.num_nodes,:,T] = (1.0/msg_U_b_del_v_inv) * msg_U_b_del_v_inv_m
             self.msg_U_b_m_del[self.num_nodes:,:,T] = self.msg_U_f_m[self.num_nodes:,:,T]
+
+
+
+        else:
+            # backward
+            if T>0:
+            # for the T0 var, we don't update its U_f_del (left-out msg)--we'll never use it
+
+                msg_U_f_del_v_inv = \
+                    1.0/self.msg_U_b_v[:self.num_nodes,:,T] + 1.0/self.msg_U_llk_v[:,:,T]
+                msg_U_f_del_v_inv_m = \
+                    torch.div(self.msg_U_b_m[:self.num_nodes,:,T],self.msg_U_b_v[:self.num_nodes,:,T])\
+                    +torch.div(self.msg_U_llk_m[:,:,T],self.msg_U_llk_v[:,:,T])
+                    
+                self.msg_U_f_v_del[:self.num_nodes,:,T] = 1.0/msg_U_f_del_v_inv
+                self.msg_U_f_v_del[self.num_nodes:,:,T] = self.msg_U_b_v[self.num_nodes:,:,T]
+                
+                self.msg_U_f_m_del[:self.num_nodes,:,T] = (1.0/msg_U_f_del_v_inv) * msg_U_f_del_v_inv_m
+                self.msg_U_f_m_del[self.num_nodes:,:,T] = self.msg_U_b_m[self.num_nodes:,:,T]
+            
+
 
 
 
@@ -317,7 +337,7 @@ class Bayes_diffu_tensor():
 
         for r in range(self.R_U):
             # msg from the left (from U_T)
-            # double check: f/b
+            # double check: f/b:done
 
             msg_m_l = self.msg_U_b_m_del[:,r,T]
             msg_v_l = self.msg_U_b_v_del[:,r,T]
@@ -363,7 +383,7 @@ class Bayes_diffu_tensor():
             target_v_inv_m_new = torch.div(target_m_star,target_v_star) -torch.div(target_m,target_v)
 
 
-            # DOUBLE CHECK
+            # DOUBLE CHECK:done
             if mode=='forward':
                 self.msg_U_f_v[:,r,T+1] = 1.0/target_v_inv_new
                 self.msg_U_f_m[:,r,T+1] = (1.0/target_v_inv_new) * target_v_inv_m_new
@@ -401,6 +421,8 @@ class Bayes_diffu_tensor():
         mu = (A_T_block @ msg_m_l.view(-1,1)).squeeze() # num_node * 1
         sigma = torch.diag(msg_v_r) + Q_T_block + A_T_block @ torch.diag(msg_v_l) @ A_T_block.T
         sample = msg_m_r
+
+        # print(sample)
 
         # compute log-Z
         dist = torch.distributions.multivariate_normal.MultivariateNormal(mu, sigma)
