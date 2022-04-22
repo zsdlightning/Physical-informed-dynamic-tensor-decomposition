@@ -119,3 +119,78 @@ def Lyapunov_slover(F,Q):
     '''
     
     return linalg.solve_continuous_lyapunov(F, Q)
+
+
+
+def nan_check_1(model,T):
+    msg_list = [model.msg_U_llk_m[:,:,T],model.msg_U_llk_v[:,:,T],\
+                model.msg_U_f_m[:,:,T],model.msg_U_f_v[:,:,T],\
+                model.msg_U_b_m[:,:,T],model.msg_U_b_v[:,:,T],\
+                model.msg_U_llk_m_del[:,:,T], model.msg_U_llk_v_del[:,:,T],\
+                model.msg_U_f_m_del[:,:,T],model.msg_U_f_v_del[:,:,T],\
+                model.msg_U_b_m_del[:,:,T],model.msg_U_b_v_del[:,:,T]]
+
+    msg_name_list = ['msg_U_llk_m','msg_U_llk_v',
+                     'msg_U_f_m','msg_U_f_v',
+                     'msg_U_b_m','msg_U_b_v',                 
+                    'msg_U_llk_m_del','msg_U_llk_v_del',
+                     'msg_U_f_m_del','msg_U_f_v_del',
+                     'msg_U_b_m_del','msg_U_b_v_del']
+    for id,msg in enumerate(msg_list):
+        if msg.isnan().any():
+            print('invalid number: %s at time %d '%(msg_name_list[id],T))
+            return False
+
+    return True
+
+def neg_check_v(model,T):
+    msg_list = [model.msg_U_llk_v[:,:,T],\
+                model.msg_U_f_v[:,:,T],\
+                model.msg_U_b_v[:,:,T],\
+                model.msg_U_llk_v_del[:,:,T],\
+                model.msg_U_f_v_del[:,:,T],\
+                model.msg_U_b_v_del[:,:,T]]
+
+    msg_name_list = ['msg_U_llk_v',
+                     'msg_U_f_v',
+                     'msg_U_b_v',                 
+                    'msg_U_llk_v_del',
+                     'msg_U_f_v_del',
+                     'msg_U_b_v_del']
+
+    for id,msg in enumerate(msg_list):
+        if (msg<=0).any():
+            print('invalid v: %s at time %d '%(msg_name_list[id],T))
+
+            return False
+
+            
+    return True
+
+# batch knorker product  
+def kronecker_product_einsum_batched(A: torch.Tensor, B: torch.Tensor): 
+    """ 
+    Batched Version of Kronecker Products 
+    :param A: has shape (b, a, c) 
+    :param B: has shape (b, k, p) 
+    :return: (b, ak, cp) 
+    """ 
+    assert A.dim() == 3 and B.dim() == 3 
+
+    res = torch.einsum('bac,bkp->bakcp', A, B).view(A.size(0), 
+                                                    A.size(1)*B.size(1), 
+                                                    A.size(2)*B.size(2) 
+                                                    ) 
+    return res 
+
+def Hadamard_product_batch(A: torch.Tensor, B: torch.Tensor):
+    """ 
+    Batched Version of Hadamard Products 
+    :param A: has shape (N, a, b) 
+    :param B: has shape (N, a, b) 
+    :return: (N, a, b) 
+    """ 
+    assert A.dim() == 3 and B.dim() == 3 
+    assert A.shape == B.shape
+    res = A*B
+    return res
