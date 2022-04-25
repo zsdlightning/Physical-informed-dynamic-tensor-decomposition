@@ -52,9 +52,8 @@ class static_ADF():
         self.post_U_v = self.v0*torch.ones(self.num_nodes,self.R_U).double().to(self.device)
 
         # print(self.ind_tr.shape)
-
-        self.post_U_mode = [torch.rand(dim,self.R_U,requires_grad=True).double() for dim in self.ndims]
-        self.post_v_mode = [torch.ones(dim,self.R_U,requires_grad=True) for dim in self.ndims]
+        self.msg_U_v_inv_m = self.m0*torch.rand(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
+        self.msg_U_v_inv = self.v0*torch.ones(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
 
         self.tau_a_T = torch.ones(self.N_time,1).to(self.device)
         self.tau_b_T = torch.ones(self.N_time,1).to(self.device)
@@ -66,6 +65,75 @@ class static_ADF():
 
         self.time_data_table_tr = utils.build_time_data_table(self.train_time_ind) 
         self.time_data_table_te = utils.build_time_data_table(self.test_time_ind) 
+
+
+    def CEP_update_T(self,T):
+
+        eind_T = self.time_data_table_tr[T] # id of observed entries at this time-stamp
+        N_T = len(eind_T) 
+        ind_T = self.ind_tr[eind_T]
+
+        y_T = self.y_tr[eind_T].squeeze()
+
+
+
+        tau_a_del_T = self.a0 + self.tau_a_T[:T].sum() + self.tau_a_T[T+1:].sum() - self.N_time +1
+        tau_b_del_T = self.b0 + self.tau_b_T[:T].sum() + self.tau_b_T[T+1:].sum()
+
+        E_tau = tau_a_del_T/tau_b_del_T
+
+        uid_table, data_table = build_id_key_table(self.nmod,ind_T)
+
+        post_U_v_inv_T = 1.0/self.msg_U_v_inv[:,:,:T].sum(-1) + 1.0/self.msg_U_v_inv[:,:,T+1].sum(-1)
+        post_U_v_inv_m_T = 1.0/self.msg_U_v_inv_m[:,:,:T].sum(-1) + 1.0/self.msg_U_v_inv_m[:,:,T+1].sum(-1)
+        
+        post_U_v_T = 1.0/post_U_v_inv_T
+        post_U_m_T = torch.div(post_U_v_inv_m_T,post_U_v_inv_T)
+
+        U_llk = torch.cat([post_U_m_T,post_U_v_T]) # concat the m and v and set grad
+        
+        post_U_m,post_U_v = self.arrange_U_llk(U_llk)
+
+        for mode in range(self.nmod):
+
+            E_z_del,E_z_del_2 = self.expectation_update_z_del(ind_T,del_mode,post_U_m,post_U_v)
+            
+            for j in range(len(uid_table[mode])):
+
+                uid = uid_table[mode][j] # id of embedding
+                eid = data_table[mode][j]
+
+                # compute msg of associated entries (but we don't store them)
+                msg_U_v_inv = E_tau * E_z_del_2[eid]  # num_eid * R_U * R_U
+                msg_U_m = torch.linalg.solve(msg_U_v_inv, E_tau * torch.bmm(self.E_z_del[eid], self.y_tr[eid].unsqueeze(-1))) # num_eid * R_U *1
+        
+    def expectation_update_z_del(self,del_mode,ind_T):
+        # compute E_z_del,E_z_del_2 by current post.U and deleting the info of mode_k
+        # only use in training step
+        
+        other_modes = [i for i in range(self.nmod)]
+        other_modes.remove(del_mode)
+        
+        init_mode = other_modes[0]
+        
+        self.E_z_del = post_U_m[init_mode][ind_T[:,init_mode]] # N*R_u*1
+        
+        E_z_del_T = torch.transpose(self.E_z_del, dim0=1, dim1=2)# N*1*R_u
+        
+        self.E_z_del_2 = self.post_U_v[init_mode][self.ind_tr[:,init_mode]] + torch.bmm(self.E_z_del,E_z_del_T) # N*R_u*R_u
+        
+        for mode in other_modes[1:]:
+            
+            cur_z = self.post_U_m[mode][self.ind_tr[:,mode]]# N*R_u*1
+            cur_z_T =  torch.transpose(cur_z, dim0=1, dim1=2)# N*1*R_u
+            cur_z_2 = self.post_U_v[mode][self.ind_tr[:,mode]] + torch.bmm(cur_z,cur_z_T)
+            
+            self.E_z_del = self.E_z_del * cur_z
+            self.E_z_del_2 = self.E_z_del_2 * cur_z_2 # N*R_u*R_u
+             
+
+
+
 
     def ADF_update_T(self,T):
         # training data feed in with each group of T
@@ -144,10 +212,11 @@ class static_ADF():
         start_idx = 0
         for mode, dim in enumerate(self.ndims):
 
-            U_m = self.post_U_m[start_idx+ind[mode]]
+            U_m = self.post_U_m[start_idx+ind[mode]].reshape(-1,1)
             U_m.requires_grad = True
+            
 
-            U_v = self.post_U_m[start_idx+ind[mode]]
+            U_v = self.post_U_v[start_idx+ind[mode]].reshape(-1,1)
             U_v.requires_grad = True
 
             embed_m.append(U_m)
@@ -155,12 +224,14 @@ class static_ADF():
 
             start_idx = start_idx + dim
 
-        E_z = embed_m[0].view(-1,1)
+            # print(start_idx)
+
+        E_z = embed_m[0]
         E_z_2 = torch.diag(embed_v[0]) + torch.mm(E_z,E_z.T)
 
         
         for mode in range(1,self.nmod):
-            E_u = embed_m[mode].view(-1,1)
+            E_u = embed_m[mode]
             E_u_2 = torch.diag(embed_v[mode]) + torch.mm(E_u,E_u.T)
 
             E_z = E_z*E_u
@@ -176,16 +247,16 @@ class static_ADF():
         E_tau_del = tau_a_del_n/tau_b_del_n
         # print(E_tau_del)
 
-        log_Z = 0.5*torch.log(E_tau_del/(2*np.pi)) \
-            -  0.5*E_tau_del* ( (y*y) - 2* (y*E_z) + E_z_2)
-        log_Z.backward()
-
-        # mu = E_z
-        # sigma = torch.sqrt((1.0/E_tau_del) + E_z_2)
-        # sample =  y
-        # dist = torch.distributions.normal.Normal(mu, sigma)
-        # log_Z = dist.log_prob(sample)
+        # log_Z = 0.5*torch.log(E_tau_del/(2*np.pi)) \
+        #     -  0.5*E_tau_del* ( (y*y) - 2* (y*E_z) + E_z_2)
         # log_Z.backward()
+
+        mu = E_z
+        sigma = torch.sqrt((1.0/E_tau_del) + E_z_2)
+        sample =  y
+        dist = torch.distributions.normal.Normal(mu, sigma)
+        log_Z = dist.log_prob(sample)
+        log_Z.backward()
 
         
 
@@ -193,16 +264,17 @@ class static_ADF():
         for mode, dim in enumerate(self.ndims):
             grad_m = embed_m[mode].grad
             grad_v = embed_v[mode].grad
-
-            # print(grad_v)
+            # torch.autograd.set_detect_anomaly(True)
+            # grad_m = torch.autograd.grad(log_Z,embed_m[mode],retain_graph = True)[0]#embed_m[mode].grad
+            # grad_v = torch.autograd.grad(log_Z,embed_v[mode],retain_graph = True)[0]#embed_v[mode].grad
 
             m_star = embed_m[mode] + embed_v[mode] * grad_m
             v_star = embed_v[mode]\
                         - torch.square(embed_v[mode]) * \
                             (torch.square(grad_m)-2*grad_v) 
 
-            self.post_U_m[start_idx+ind[mode]] = m_star.detach()
-            self.post_U_v[start_idx+ind[mode]] = v_star.detach()
+            self.post_U_m[start_idx+ind[mode],:] = m_star.detach().squeeze()
+            self.post_U_v[start_idx+ind[mode],:] = v_star.detach().squeeze()
 
 
         a = 0.5 + 1
