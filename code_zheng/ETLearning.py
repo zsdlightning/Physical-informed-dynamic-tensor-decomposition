@@ -9,8 +9,8 @@ from torch.nn import Module, Sequential, Linear, Tanh, Parameter, ModuleList, Pa
 from torchdiffeq import odeint
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from pysgmcmc.optimizers.sgld import SGLD
-from pysgmcmc.optimizers.sghmc import SGHMC
+# from pysgmcmc.optimizers.sgld import SGLD
+# from pysgmcmc.optimizers.sghmc import SGHMC
 from torch.linalg import solve, cholesky, inv
 
 from torch.utils import data as data_utils
@@ -218,6 +218,7 @@ class ODEFunction(Module):
 
 class ETL(Module):
     def __init__(self, nvec, dim_embedding, num_pseudo, reaction_layers,  device=torch.device('cuda:0')):
+        device=torch.device('cpu')
         super(ETL, self).__init__()
         self.device = device
         self.dim_embedding = dim_embedding # embedding dimension

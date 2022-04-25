@@ -17,9 +17,13 @@ class Bayes_diffu_tensor():
         self.epoch = hyper_dict['epoch'] # passing epoch
         self.R_U = hyper_dict['R_U'] # rank of latent factor of embedding
         self.device = hyper_dict['device']
+        self.DAMPING = hyper_dict['DAMPING']
         
         self.a0 = hyper_dict['a0']
         self.b0 = hyper_dict['b0']
+
+        self.m0 = torch.tensor(1.0)
+        self.v0 = torch.tensor(1e0)
         
         # data-dependent paras
         self.data_dict = data_dict
@@ -53,8 +57,8 @@ class Bayes_diffu_tensor():
         
         # actually, it's the massage from llk-factor -> variabel U
         
-        self.msg_U_llk_m = torch.rand(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
-        self.msg_U_llk_v = torch.ones(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
+        self.msg_U_llk_m =  self.m0*torch.rand(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
+        self.msg_U_llk_v = self.v0*torch.ones(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
         
         # self.msg_U_llk_m = [torch.rand(ndim,self.R_U,self.N_time).double().to(self.device) \
         #     for ndim in self.ndims] 
@@ -68,11 +72,11 @@ class Bayes_diffu_tensor():
         # for here, we arrange the U-msg by concat-all-as-tensor for efficient computing in transition
         # recall, with Matern 23 kernel, msg_U_transition = [ U, U'], so the firsr-dim is 2*num_nodes 
         
-        self.msg_U_f_m = torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device) 
-        self.msg_U_f_v = torch.ones(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)
+        self.msg_U_f_m =self.m0* torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device) 
+        self.msg_U_f_v = self.v0*torch.ones(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)
         
-        self.msg_U_b_m = torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)
-        self.msg_U_b_v = torch.ones(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)   
+        self.msg_U_b_m =self.m0* torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)
+        self.msg_U_b_v = self.v0*torch.ones(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)   
 
 
         # set the start and end factor
@@ -82,24 +86,24 @@ class Bayes_diffu_tensor():
             self.msg_U_b_v[:,r,self.N_time-1] = 1e8
 
             self.msg_U_f_m[:,r,0] = 0
-            self.msg_U_f_v[:,r,0] = torch.diag(self.P_inf)
+            self.msg_U_f_v[:,r,0] = 1e8#torch.diag(self.P_inf)
 
     
         # init the calibrating factors / q_del in draft, init/update with current msg
         
         # actually, it's the massage from variabel U -> llk-factor
         self.msg_U_llk_m_del = torch.rand(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
-        self.msg_U_llk_v_del = torch.ones(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
+        self.msg_U_llk_v_del = self.v0 * torch.ones(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
           
         self.msg_tau_a_del_T = torch.ones(self.N_time,1).to(self.device)
         self.msg_tau_b_del_T = torch.ones(self.N_time,1).to(self.device)
                 
         # actually, it's the massage from variabel U -> trans-factor
-        self.msg_U_f_m_del = torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device) 
-        self.msg_U_f_v_del = torch.ones(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)
+        self.msg_U_f_m_del = self.m0*torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device) 
+        self.msg_U_f_v_del = self.v0*torch.ones(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)
         
-        self.msg_U_b_m_del = torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device) 
-        self.msg_U_b_v_del = torch.ones(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device) 
+        self.msg_U_b_m_del =self.m0* torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device) 
+        self.msg_U_b_v_del = self.v0*torch.ones(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device) 
         
         # as the computing of msg_tau_del is trival, we don't assign extra varb for it    
         
@@ -145,21 +149,23 @@ class Bayes_diffu_tensor():
 
         self.msg_update_tau_del(T)
         E_tau_del = self.msg_tau_a_del_T[T]/self.msg_tau_b_del_T[T]
+
+        # print(E_z_del.shape,E_z_2_del.shape,y_T.shape)
         
-        
-        # log_Z = 0.5*N_T*torch.log(E_tau_del/(2*np.pi)) \
-        #     -  0.5*E_tau_del* ( (y_T*y_T).sum() - 2* (y_T*E_z_del).sum() + E_z_2_del.sum())
+        log_Z = 0.5*N_T*torch.log(E_tau_del/(2*np.pi)) \
+            -  0.5*E_tau_del* ( (y_T*y_T).sum() - 2* (y_T*E_z_del).sum() + E_z_2_del.sum())
 
-        # log_Z.backward()
+        log_Z.backward()
 
 
-        mu = E_z_del
-        sigma = (1.0/E_tau_del) * torch.eye(N_T).double()
-        sample =  y_T
-        dist = torch.distributions.multivariate_normal.MultivariateNormal(mu, sigma)
-        log_Z_trans = dist.log_prob(sample)
 
-        log_Z_trans.backward()
+        # mu = E_z_del
+        # sigma = (1.0/E_tau_del) * torch.eye(N_T).double()+torch.diag(E_z_2_del)
+        # sample =  y_T
+        # dist = torch.distributions.multivariate_normal.MultivariateNormal(mu, sigma)
+        # log_Z_trans = dist.log_prob(sample)
+
+        # log_Z_trans.backward()
 
 
 
@@ -178,27 +184,36 @@ class Bayes_diffu_tensor():
                             (torch.square(U_llk_del_m_grad)-2*U_llk_del_v_grad) 
 
 
-        # U_llk_v_star = torch.where(U_llk_v_star>0,U_llk_v_star,1.0)
+        # U_llk_v_star = torch.where(U_llk_v_star>0,U_llk_v_star,1e5)
 
         # msg update U_llk: f_star / f_del
         # set as constant for nan/inf case 
-        msg_U_llk_v_inv = 1.0/U_llk_v_star - 1.0/self.msg_U_llk_v_del[:,:,T]
-        msg_U_llk_v_inv_m = torch.div(U_llk_m_star,U_llk_v_star) \
-                        - torch.div(self.msg_U_llk_m_del[:,:,T],self.msg_U_llk_v_del[:,:,T])
+        # msg_U_llk_v_inv = 1.0/U_llk_v_star - 1.0/self.msg_U_llk_v_del[:,:,T]
+        # msg_U_llk_v_inv_m = torch.div(U_llk_m_star,U_llk_v_star) \
+        #                 - torch.div(self.msg_U_llk_m_del[:,:,T],self.msg_U_llk_v_del[:,:,T])
 
-        # msg_U_llk_v_inv = 1.0/U_llk_v_star[uid] - 1.0/self.msg_U_llk_v_del[uid,:,T]
-        # msg_U_llk_v_inv_m = torch.div(U_llk_m_star[uid],U_llk_v_star[uid]) \
-        #                 - torch.div(self.msg_U_llk_m_del[uid,:,T],self.msg_U_llk_v_del[uid,:,T])
+        msg_U_llk_v_inv_new = 1.0/U_llk_v_star[uid] - 1.0/self.msg_U_llk_v_del[uid,:,T]
+        msg_U_llk_v_inv_m_new = torch.div(U_llk_m_star[uid],U_llk_v_star[uid]) \
+                        - torch.div(self.msg_U_llk_m_del[uid,:,T],self.msg_U_llk_v_del[uid,:,T])
 
-        self.msg_U_llk_v[:,:,T] = torch.nan_to_num(1.0/msg_U_llk_v_inv)
-        self.msg_U_llk_m[:,:,T] = torch.nan_to_num((1.0/msg_U_llk_v_inv) * msg_U_llk_v_inv_m)
+        # Damping & neg-var check
+        msg_U_llk_v_inv = self.DAMPING*(1.0/self.msg_U_llk_v[uid,:,T]) + (1-self.DAMPING)*msg_U_llk_v_inv_new
+        msg_U_llk_v_inv_m = self.DAMPING*torch.div(self.msg_U_llk_m[uid,:,T],self.msg_U_llk_v[uid,:,T])\
+                                + (1-self.DAMPING)*msg_U_llk_v_inv_m_new 
+
+        msg_U_llk_v_inv = torch.where(msg_U_llk_v_inv>0,msg_U_llk_v_inv,1e-3)
 
 
-        print(T)
+        self.msg_U_llk_v[uid,:,T] = torch.nan_to_num(1.0/msg_U_llk_v_inv)
+        self.msg_U_llk_m[uid,:,T] = torch.nan_to_num((1.0/msg_U_llk_v_inv) * msg_U_llk_v_inv_m)
+
+
+        # print(T)
+        # assert (U_llk_v_star[uid]>0).all() == True
         # assert (self.msg_U_llk_v[:,:,T]>0).all() == True
         # assert (self.msg_U_llk_v_del[:,:,T]>0).all() == True
         # print(U_llk_v_star)
-        assert (U_llk_v_star[uid]>0).all() == True
+        
 
 
         # self.msg_U_llk_m[:,:,T] = torch.nan_to_num((1.0/msg_U_llk_v_inv) * msg_U_llk_v_inv_m)
@@ -258,9 +273,9 @@ class Bayes_diffu_tensor():
             return E_z.squeeze().sum(-1), torch.einsum('bii->b',\
                                             torch.matmul(E_z_2,torch.ones(self.R_U,self.R_U).double().to(self.device) ))
 
-            # return E_z.squeeze().sum(-1), torch.einsum('bii->b',E_z_2)
-        else:
-            return E_z.squeeze(), torch.einsum('bii->b',E_z_2)
+        #     # return E_z.squeeze().sum(-1), torch.einsum('bii->b',E_z_2)
+        # else:
+        #     return E_z.squeeze(), torch.einsum('bii->b',E_z_2)
         
 
 
@@ -298,7 +313,7 @@ class Bayes_diffu_tensor():
         
         # double check:done
 
-        if mode=='forward' and T<self.N_time-1:
+        # if mode=='forward':
             # for the last time var, we don't have to update its U_b_del (right-out msg)--we'll never use it
 
             msg_U_b_del_v_inv = \
@@ -316,7 +331,7 @@ class Bayes_diffu_tensor():
 
 
 
-        else:
+        # else:
             # backward
             # if T>0:
             # for the T0 var, we don't update its U_f_del (left-out msg)--we'll never use it
@@ -385,8 +400,8 @@ class Bayes_diffu_tensor():
         msg_m_r = self.msg_U_f_m_del[:,:,T+1].T.reshape(-1)
         msg_v_r = self.msg_U_f_v_del[:,:,T+1].T.reshape(-1)
 
-        msg_v_l = torch.where(msg_v_l>0,msg_v_l,0.5)
-        msg_v_r = torch.where(msg_v_r>0,msg_v_r,0.5)
+        msg_v_l = torch.where(msg_v_l>0,msg_v_l,1e5)
+        msg_v_r = torch.where(msg_v_r>0,msg_v_r,1e5)
 
         if mode=='forward':
         #  in the forward pass, we only update the msg to right (U_{T+1})
@@ -422,22 +437,46 @@ class Bayes_diffu_tensor():
         target_m_star = target_m + target_v * target_m_grad
         target_v_star = target_v - torch.square(target_v) * (torch.square(target_m_grad) - 2*target_v_grad)
 
-        target_v_star = torch.where(target_v_star>0,target_v_star,0.5)
-
         # target_v_star = torch.where(target_v_star>0,target_v_star,0.5)
+
+        # target_v_star = torch.where(target_v_star>0,target_v_star,1e5)
 
         # update the factor: msg_new = msg_star / msg_old
         target_v_inv_new = torch.nan_to_num(1.0/target_v_star - 1.0/target_v)
+
+
         target_v_inv_m_new = torch.nan_to_num(torch.div(target_m_star,target_v_star) -torch.div(target_m,target_v))
 
 
-        if mode=='forward':
-            self.msg_U_f_v[:,:,T+1] = (1.0/target_v_inv_new).reshape(self.R_U,2*self.num_nodes).T
-            self.msg_U_f_m[:,:,T+1] = ((1.0/target_v_inv_new) * target_v_inv_m_new).reshape(self.R_U,2*self.num_nodes).T
-        else:
-            self.msg_U_b_v[:,:,T] =  (1.0/target_v_inv_new).reshape(self.R_U,2*self.num_nodes).T
-            self.msg_U_b_m[:,:,T] = ((1.0/target_v_inv_new) * target_v_inv_m_new).reshape(self.R_U,2*self.num_nodes).T
 
+        if mode=='forward':
+
+            # DAMPING:
+            target_v_inv =  self.DAMPING*(1.0/self.msg_U_f_v[:,:,T+1].T.reshape(-1)) + (1-self.DAMPING)*target_v_inv_new
+
+            target_v_inv_m = self.DAMPING*torch.div(self.msg_U_f_m[:,:,T+1],self.msg_U_f_v[:,:,T+1]).T.reshape(-1)\
+                + (1-self.DAMPING)*target_v_inv_m_new
+
+            target_v_inv = torch.where( target_v_inv>0, target_v_inv, 1e-5)
+
+            self.msg_U_f_v[:,:,T+1] = (1.0/target_v_inv).reshape(self.R_U,2*self.num_nodes).T
+            self.msg_U_f_m[:,:,T+1] = ((1.0/target_v_inv) * target_v_inv_m).reshape(self.R_U,2*self.num_nodes).T
+        else:
+
+            # DAMPING:
+            target_v_inv =  self.DAMPING*(1.0/self.msg_U_b_v[:,:,T].T.reshape(-1)) + (1-self.DAMPING)*target_v_inv_new
+
+            target_v_inv_m = self.DAMPING*torch.div(self.msg_U_b_m[:,:,T],self.msg_U_b_v[:,:,T+1]).T.reshape(-1)\
+                + (1-self.DAMPING)*target_v_inv_m_new
+
+            target_v_inv = torch.where( target_v_inv>0, target_v_inv, 1e-5)            
+
+
+            self.msg_U_b_v[:,:,T] =  (1.0/target_v_inv).reshape(self.R_U,2*self.num_nodes).T
+            self.msg_U_b_m[:,:,T] = ((1.0/target_v_inv) * target_v_inv_m).reshape(self.R_U,2*self.num_nodes).T
+
+        # print(T)
+        # assert (target_v_star>0).all() == True
 
 
     def model_test(self):
@@ -539,4 +578,37 @@ class Bayes_diffu_tensor():
                 self.msg_U_b_m[:,r,T] = torch.nan_to_num((1.0/target_v_inv_new) * target_v_inv_m_new)
         
         
+
+    def msg_update_U_trans_linear(self,T,mode='forward'):
         
+        # time_gap = self.time_uni[T+1] - self.time_uni[T]
+        # A_T = torch.matrix_exp(self.F * 0.01)
+
+        # # A_T = torch.eye(2*self.num_nodes).double()
+        
+        # A_T_inv = torch.linalg.inv(A_T)
+        # Q_T = self.P_inf - self.P_inf @ A_T @ self.P_inf.T
+
+        for r in range(self.R_U):
+            # msg from the left (from U_T)
+            # double check: f/b:done
+
+            msg_m_l = self.msg_U_b_m_del[:,r,T]
+            msg_v_l = self.msg_U_b_v_del[:,r,T]
+            
+            
+            # msg from the right (from U_{T+1})
+            msg_m_r = self.msg_U_f_m_del[:,r,T+1]
+            msg_v_r = self.msg_U_f_v_del[:,r,T+1]
+
+
+
+            # DOUBLE CHECK:done
+            if mode=='forward':
+
+
+                self.msg_U_f_v[:,r,T+1] = msg_v_l
+                self.msg_U_f_m[:,r,T+1] = msg_m_l
+            else:
+                self.msg_U_b_v[:,r,T] = msg_v_r
+                self.msg_U_b_m[:,r,T] = msg_m_r
