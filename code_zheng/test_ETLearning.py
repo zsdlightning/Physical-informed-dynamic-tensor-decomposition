@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 
 def test_beijing5(dim_embedding=3, save=False):
-    data_file = '../data/Beijing/beijing_15k.npy'
+    data_file = '../../data/Beijing/beijing_15k.npy'
     data = np.load(data_file, allow_pickle=True).item()
     nvec = data['ndims']
     data = data['data']
@@ -14,7 +14,7 @@ def test_beijing5(dim_embedding=3, save=False):
     rmse_list = []
     ll_list = []
     mae_list = []
-    for fold in range(5):
+    for fold in range(1):
         ind = data[fold]['tr_ind']
         t = data[fold]['tr_T']
         y = data[fold]['tr_y'].astype(np.float32)
@@ -33,7 +33,7 @@ def test_beijing5(dim_embedding=3, save=False):
         # (tr_idx, tr_T, tr_y), (te_idx, te_T, te_y), U = gen_data([10, 10, 10], [cos_func, cos_func, cos_func], 300, 300)
 
         model = ETL(nvec, dim_embedding, 100, [dim_embedding+1, 10, 10, dim_embedding])
-        nrmse, nmae = model.train(ind, t, y, ind_te, t_te, y_te, test_every=50, total_epoch=2000, lr=1e-2, batch_size=1000)
+        nrmse, nmae = model.train(ind, t, y, ind_te, t_te, y_te, test_every=50, total_epoch=10, lr=1e-2, batch_size=1000)
         rmse_list.append(np.min(nrmse))
         mae_list.append(np.min(nmae))
         # res.append([tr_rmse_list, tr_ll_list, tr_pred_m_list, tr_pred_std_list, te_rmse_list, te_ll_list, te_pred_m_list, te_pred_std_list])
@@ -178,8 +178,8 @@ def test_mv5(dim_embedding=3, save=False):
 
         
 if __name__ == '__main__':
-    test_mv5(3)
-    # test_beijing5(3)
+    # test_mv5(3)
+    test_beijing5(3)
     # test_server5(3)
     # test_radar5(3)
     # test_traffic5(3)
