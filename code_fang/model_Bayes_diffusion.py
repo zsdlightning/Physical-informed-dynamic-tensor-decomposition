@@ -22,8 +22,8 @@ class Bayes_diffu_tensor():
         self.a0 = hyper_dict['a0']
         self.b0 = hyper_dict['b0']
 
-        self.m0 = torch.tensor(1.0)
-        self.v0 = torch.tensor(1e0)
+        self.m0 = torch.tensor(0.1)
+        self.v0 = torch.tensor(1e5)
         
         # data-dependent paras
         self.data_dict = data_dict
@@ -469,7 +469,7 @@ class Bayes_diffu_tensor():
             target_v_inv_m = self.DAMPING*torch.div(self.msg_U_b_m[:,:,T],self.msg_U_b_v[:,:,T+1]).T.reshape(-1)\
                 + (1-self.DAMPING)*target_v_inv_m_new
 
-            target_v_inv = torch.where( target_v_inv>0, target_v_inv, 1e-5)            
+            target_v_inv = torch.where(target_v_inv>0, target_v_inv, 1e-5)            
 
 
             self.msg_U_b_v[:,:,T] =  (1.0/target_v_inv).reshape(self.R_U,2*self.num_nodes).T

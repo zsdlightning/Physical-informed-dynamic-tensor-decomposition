@@ -42,29 +42,29 @@ class static_ADF():
         self.nmod = len(self.ndims)
         self.num_nodes = sum(self.ndims)
         
-        self.train_time_ind =data_dict['tr_T_disct'] # N*1
-        self.test_time_ind = data_dict['te_T_disct'] # N*1
+        # self.train_time_ind =data_dict['tr_T_disct'] # N*1
+        # self.test_time_ind = data_dict['te_T_disct'] # N*1
         
-        self.time_uni = data_dict['time_uni'] # N_time*1
-        self.N_time = len(self.time_uni) 
+        # self.time_uni = data_dict['time_uni'] # N_time*1
+        # self.N_time = len(self.time_uni) 
 
         self.post_U_m = self.m0*torch.rand(self.num_nodes,self.R_U).double().to(self.device)
         self.post_U_v = self.v0*torch.ones(self.num_nodes,self.R_U).double().to(self.device)
 
         # print(self.ind_tr.shape)
-        self.msg_U_v_inv_m = self.m0*torch.rand(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
-        self.msg_U_v_inv = self.v0*torch.ones(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
+        # self.msg_U_v_inv_m = self.m0*torch.rand(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
+        # self.msg_U_v_inv = self.v0*torch.ones(self.num_nodes,self.R_U,self.N_time).double().to(self.device)
 
-        self.tau_a_T = torch.ones(self.N_time,1).to(self.device)
-        self.tau_b_T = torch.ones(self.N_time,1).to(self.device)
+        # self.tau_a_T = torch.ones(self.N_time,1).to(self.device)
+        # self.tau_b_T = torch.ones(self.N_time,1).to(self.device)
 
         self.tau_a_N = torch.ones(self.N,1).to(self.device)
         self.tau_b_N = torch.ones(self.N,1).to(self.device)
 
         self.tau=0.1
 
-        self.time_data_table_tr = utils.build_time_data_table(self.train_time_ind) 
-        self.time_data_table_te = utils.build_time_data_table(self.test_time_ind) 
+        # self.time_data_table_tr = utils.build_time_data_table(self.train_time_ind) 
+        # self.time_data_table_te = utils.build_time_data_table(self.test_time_ind) 
 
 
     def CEP_update_T(self,T):
