@@ -194,3 +194,19 @@ def Hadamard_product_batch(A: torch.Tensor, B: torch.Tensor):
     assert A.shape == B.shape
     res = A*B
     return res
+
+# batch knorker product  
+def kronecker_product_einsum_batched(A: torch.Tensor, B: torch.Tensor): 
+    """ 
+    Batched Version of Kronecker Products 
+    :param A: has shape (b, a, c) 
+    :param B: has shape (b, k, p) 
+    :return: (b, ak, cp) 
+    """ 
+    assert A.dim() == 3 and B.dim() == 3 
+
+    res = torch.einsum('bac,bkp->bakcp', A, B).view(A.size(0), 
+                                                    A.size(1)*B.size(1), 
+                                                    A.size(2)*B.size(2) 
+                                                    ) 
+    return res 
