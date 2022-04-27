@@ -11,8 +11,8 @@ from utils import build_id_key_table
 from model_Bayes_diffusion import Bayes_diffu_tensor
 import tqdm
 
-# data_file = '../processed_data/beijing_15k.npy'
-data_file = '../processed_data/ctr_10k.npy'
+data_file = '../processed_data/beijing_15k.npy'
+# data_file = '../processed_data/ctr_10k.npy'
 
 # data_file = '../processed_data/mvlens_10k.npy'
 # data_file = '../processed_data/server_10k.npy'
@@ -66,8 +66,8 @@ for epoch in tqdm.tqdm(range(EPOCH)):
 #     # forward
     for T in range(N_T):
         
-        if T>0:
-            model.msg_update_U_llk_del(T)
+        
+        model.msg_update_U_llk_del(T)
         model.msg_update_U_llk(T)
 
         

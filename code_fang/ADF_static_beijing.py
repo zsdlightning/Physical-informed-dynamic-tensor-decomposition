@@ -13,29 +13,35 @@ import utils
 # import data_loader
 import time
 
-# data_file = '../processed_data/beijing_15k.npy'
+data_file = '../processed_data/beijing_15k.npy'
 # data_file = '../processed_data/mvlens_10k.npy'
 # data_file = '../processed_data/server_10k.npy'
 # data_file = '../processed_data/dblp_50k.npy'
-data_file = '../processed_data/ctr_10k.npy'
+# data_file = '../processed_data/ctr_10k.npy'
 
 full_data = np.load(data_file, allow_pickle=True).item()
 
 fold=0
 R_U = 2
 
+# mode = 'static'
+mode = 'discret_time'  # add the discrete timestamp as extra mode
+
 
 # here should add one more data-loader class
 data_dict = full_data['data'][fold]
-data_dict['ndims'] = full_data['ndims']#+ [len(full_data['time_uni'])]
 data_dict['device'] = torch.device('cpu')
 
 
-data_dict['tr_ind'] = data_dict['tr_ind']
-data_dict['te_ind'] = data_dict['te_ind']
+if mode == 'discret_time':
+    data_dict['ndims'] = full_data['ndims']+ [len(full_data['time_uni'])]
+    data_dict['tr_ind'] = np.concatenate([data_dict['tr_ind'],data_dict['tr_T_disct'].reshape(-1,1)],1)
+    data_dict['te_ind'] = np.concatenate([data_dict['te_ind'],data_dict['te_T_disct'].reshape(-1,1)],1)
 
-# data_dict['tr_ind'] = np.concatenate([data_dict['tr_ind'],data_dict['tr_T_disct'].reshape(-1,1)],1)
-# data_dict['te_ind'] = np.concatenate([data_dict['te_ind'],data_dict['te_T_disct'].reshape(-1,1)],1)
+else:
+    data_dict['ndims'] = full_data['ndims']
+    data_dict['tr_ind'] = data_dict['tr_ind']
+    data_dict['te_ind'] = data_dict['te_ind']
 
 data_dict['num_node'] = full_data['num_node']
 
