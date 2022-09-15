@@ -66,8 +66,8 @@ for epoch in tqdm.tqdm(range(EPOCH)):
 #     # forward
     for T in range(N_T):
         
-        if T>0:
-            model.msg_update_U_llk_del(T)
+        
+        model.msg_update_U_llk_del(T)
         model.msg_update_U_llk(T)
 
         if T<N_T-1:
