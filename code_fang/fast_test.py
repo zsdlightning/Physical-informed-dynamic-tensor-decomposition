@@ -11,8 +11,8 @@ from utils import build_id_key_table
 from model_Bayes_diffusion import Bayes_diffu_tensor
 import tqdm
 
-# data_file = '../processed_data/beijing_15k.npy'
-data_file = '../processed_data/ctr_10k.npy'
+data_file = '../processed_data/beijing_15k.npy'
+# data_file = '../processed_data/ctr_10k.npy'
 
 # data_file = '../processed_data/mvlens_10k.npy'
 # data_file = '../processed_data/server_10k.npy'
@@ -38,7 +38,7 @@ hyper_dict={}
 hyper_dict['epoch'] = 5
 hyper_dict['ls'] = 1
 hyper_dict['var'] = 0.1
-hyper_dict['device'] = torch.device("cpu")
+hyper_dict['device'] = torch.device("cuda")
 hyper_dict['R_U'] = 2 # dim of each node embedding
 hyper_dict['c'] = 10 # diffusion rate
 hyper_dict['a0']=1.0
@@ -69,8 +69,6 @@ for epoch in tqdm.tqdm(range(EPOCH)):
         if T>0:
             model.msg_update_U_llk_del(T)
         model.msg_update_U_llk(T)
-
-        
 
         if T<N_T-1:
             model.msg_update_U_trans_del(T,mode='forward')

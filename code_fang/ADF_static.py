@@ -13,11 +13,11 @@ import utils
 # import data_loader
 import time
 
-# data_file = '../processed_data/beijing_15k.npy'
+data_file = '../processed_data/beijing_15k.npy'
 # data_file = '../processed_data/mvlens_10k.npy'
 # data_file = '../processed_data/server_10k.npy'
 # data_file = '../processed_data/dblp_50k.npy'
-data_file = '../processed_data/ctr_10k.npy'
+# data_file = '../processed_data/ctr_10k.npy'
 
 full_data = np.load(data_file, allow_pickle=True).item()
 

@@ -72,10 +72,10 @@ class Bayes_diffu_tensor():
         # for here, we arrange the U-msg by concat-all-as-tensor for efficient computing in transition
         # recall, with Matern 23 kernel, msg_U_transition = [ U, U'], so the firsr-dim is 2*num_nodes 
         
-        self.msg_U_f_m =self.m0* torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device) 
+        self.msg_U_f_m = self.m0*torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device) 
         self.msg_U_f_v = self.v0*torch.ones(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)
         
-        self.msg_U_b_m =self.m0* torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)
+        self.msg_U_b_m = self.m0*torch.rand(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)
         self.msg_U_b_v = self.v0*torch.ones(2*self.num_nodes,self.R_U,self.N_time).double().to(self.device)   
 
 
@@ -86,7 +86,7 @@ class Bayes_diffu_tensor():
             self.msg_U_b_v[:,r,self.N_time-1] = 1e8
 
             self.msg_U_f_m[:,r,0] = 0
-            self.msg_U_f_v[:,r,0] = 1e8#torch.diag(self.P_inf)
+            self.msg_U_f_v[:,r,0] = 1e8 #torch.diag(self.P_inf)
 
     
         # init the calibrating factors / q_del in draft, init/update with current msg
@@ -149,14 +149,11 @@ class Bayes_diffu_tensor():
 
         self.msg_update_tau_del(T)
         E_tau_del = self.msg_tau_a_del_T[T]/self.msg_tau_b_del_T[T]
-
-        # print(E_z_del.shape,E_z_2_del.shape,y_T.shape)
         
         log_Z = 0.5*N_T*torch.log(E_tau_del/(2*np.pi)) \
             -  0.5*E_tau_del* ( (y_T*y_T).sum() - 2* (y_T*E_z_del).sum() + E_z_2_del.sum())
 
         log_Z.backward()
-
 
 
         # mu = E_z_del
@@ -174,11 +171,8 @@ class Bayes_diffu_tensor():
         U_llk_del_m_grad = U_llk_del_grad[:self.num_nodes]
         U_llk_del_v_grad = U_llk_del_grad[self.num_nodes:]
 
-        
-
         # ADF update
         U_llk_m_star = self.msg_U_llk_m_del[:,:,T] + self.msg_U_llk_v_del[:,:,T] * U_llk_del_m_grad
-        
         U_llk_v_star = self.msg_U_llk_v_del[:,:,T]\
                         - torch.square(self.msg_U_llk_v_del[:,:,T]) * \
                             (torch.square(U_llk_del_m_grad)-2*U_llk_del_v_grad) 
@@ -250,7 +244,6 @@ class Bayes_diffu_tensor():
         
         
     def moment_product_U_del(self,ind_T,U_llk_T_m,U_llk_T_v):
-        # double check E_z_2:done
         # compute first and second moments of \Hadmard_prod_{k \in given modes} u_k -CP based on the U_llk_del
         # based on the U_llk_del (calibrating factors)
 
@@ -272,10 +265,6 @@ class Bayes_diffu_tensor():
         if self.R_U>1:
             return E_z.squeeze().sum(-1), torch.einsum('bii->b',\
                                             torch.matmul(E_z_2,torch.ones(self.R_U,self.R_U).double().to(self.device) ))
-
-        #     # return E_z.squeeze().sum(-1), torch.einsum('bii->b',E_z_2)
-        # else:
-        #     return E_z.squeeze(), torch.einsum('bii->b',E_z_2)
         
 
 
