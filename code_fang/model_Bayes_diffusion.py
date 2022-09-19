@@ -178,21 +178,29 @@ class Bayes_diffu_tensor:
         )  # first and second moment of CP-pred
 
         self.msg_update_tau_del(T)
-        E_tau_del = self.msg_tau_a_del_T[T] / self.msg_tau_b_del_T[T]
+        """fang: fix tau"""
+        E_tau_del = torch.tensor(
+            1.0
+        )  # self.msg_tau_a_del_T[T] / self.msg_tau_b_del_T[T]
 
-        log_Z = 0.5 * N_T * torch.log(E_tau_del / (2 * np.pi)) - 0.5 * E_tau_del * (
-            (y_T * y_T).sum() - 2 * (y_T * E_z_del).sum() + E_z_2_del.sum()
+        # log_Z = 0.5 * N_T * torch.log(E_tau_del / (2 * np.pi)) - 0.5 * E_tau_del * (
+        #     (y_T * y_T).sum() - 2 * (y_T * E_z_del).sum() + E_z_2_del.sum()
+        # )
+
+        # log_Z.backward()
+
+        mu = E_z_del
+        sigma = (
+            (1.0 / E_tau_del) * torch.eye(N_T).double().to(self.device)
+            + torch.diag(E_z_2_del)
+            - torch.outer(mu, mu)
         )
 
-        log_Z.backward()
+        sample = y_T
+        dist = torch.distributions.multivariate_normal.MultivariateNormal(mu, sigma)
+        log_Z_trans = dist.log_prob(sample)
 
-        # mu = E_z_del
-        # sigma = (1.0/E_tau_del) * torch.eye(N_T).double()+torch.diag(E_z_2_del)
-        # sample =  y_T
-        # dist = torch.distributions.multivariate_normal.MultivariateNormal(mu, sigma)
-        # log_Z_trans = dist.log_prob(sample)
-
-        # log_Z_trans.backward()
+        log_Z_trans.backward()
 
         U_llk_del_grad = U_llk_del_T.grad
 
@@ -497,7 +505,8 @@ class Bayes_diffu_tensor:
             torch.diag(msg_v_r)
             + Q_T_block
             + A_T_block @ torch.diag(msg_v_l) @ A_T_block.T
-        )
+        ) - torch.outer(mu, mu)
+
         sample = msg_m_r
 
         # print(sample)

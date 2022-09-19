@@ -189,7 +189,7 @@ class static_ADF:
         E_tau_del = tau_a_del_n / tau_b_del_n
 
         # fang: try to fix tau
-        E_tau_del = torch.tensor(torch.var(self.y_tr))
+        # E_tau_del = torch.tensor(torch.var(self.y_tr))
         # print(E_tau_del)
 
         """follow shandian's version"""
@@ -197,18 +197,18 @@ class static_ADF:
         f_v = E_z_2 - E_z**2
         y_v = f_v + E_tau_del
 
-        log_Z = (
-            -0.5 * torch.log(torch.tensor(2 * np.pi))
-            - 0.5 * torch.log(y_v)
-            - 0.5 / y_v * (y - f_mean) ** 2
-        )
+        # log_Z = (
+        #     -0.5 * torch.log(torch.tensor(2 * np.pi))
+        #     - 0.5 * torch.log(y_v)
+        #     - 0.5 / y_v * (y - f_mean) ** 2
+        # )
 
         """fang's version"""
-        # mu = E_z
-        # sigma = torch.sqrt((1.0 / E_tau_del) + E_z_2) - E_z**2
-        # sample = y
-        # dist = torch.distributions.normal.Normal(mu, sigma)
-        # log_Z = dist.log_prob(sample)
+        mu = E_z
+        sigma = torch.sqrt((1.0 / E_tau_del) + E_z_2 - E_z**2)
+        sample = y
+        dist = torch.distributions.normal.Normal(mu, sigma)
+        log_Z = dist.log_prob(sample)
         log_Z.backward()
 
         start_idx = 0
@@ -236,8 +236,9 @@ class static_ADF:
 
             start_idx = start_idx + dim
 
-        a = 0.5 + 1
+        a = 1.5
         b = 0.5 * ((y * y) - 2 * (y * E_z) + E_z_2).detach()
+
         self.tau_a_N[n] = a
         self.tau_b_N[n] = b
 
