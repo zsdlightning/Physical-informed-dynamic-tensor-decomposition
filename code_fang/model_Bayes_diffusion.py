@@ -192,8 +192,7 @@ class Bayes_diffu_tensor:
         mu = E_z_del
         sigma = (
             (1.0 / E_tau_del) * torch.eye(N_T).double().to(self.device)
-            + torch.diag(E_z_2_del)
-            - torch.outer(mu, mu)
+            + torch.diag(E_z_2_del-mu**2)
         )
 
         sample = y_T

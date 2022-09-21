@@ -7,6 +7,7 @@ import utils
 from utils import generate_state_space_Matern_23
 from scipy import linalg
 from utils import build_id_key_table
+torch.manual_seed(12)
 
 
 # discretize the time-stamp as extra-mode, and update it through ADF
@@ -56,18 +57,41 @@ class static_ADF:
 
         self.tau = 0.1
 
+        ''' the required vars for ADF_update_T'''
+        self.N_time = len(data_dict['time_uni'])
+        self.tau_a_T = torch.ones(self.N_time, 1).to(self.device)
+        self.tau_b_T = torch.ones(self.N_time, 1).to(self.device)
+
+        self.train_time_ind = data_dict["tr_T_disct"]  # N*1
+        self.test_time_ind = data_dict["te_T_disct"]  # N*1
+        self.time_data_table_tr = utils.build_time_data_table(self.train_time_ind)
+        self.time_data_table_te = utils.build_time_data_table(self.test_time_ind)
+
+
+
+    def ADF_update_T_n(self, T):
+        eind_T = self.time_data_table_tr[T]
+        for n in eind_T:
+            self.ADF_update_N(n)
+
+
+
+
+
     def ADF_update_T(self, T):
         # training data feed in with each group of T
-
         eind_T = self.time_data_table_tr[T]  # id of observed entries at this time-stamp
+        
+        
         N_T = len(eind_T)
         ind_T = self.ind_tr[eind_T]
 
         y_T = self.y_tr[eind_T].squeeze()
 
         U_llk = torch.cat(
-            [self.post_U_m, self.post_U_v]
+            [self.post_U_m.clone().detach(), self.post_U_v.clone().detach()]
         )  # concat the m and v and set grad
+
         U_llk.requires_grad = True
 
         U_llk_m, U_llk_v = self.arrange_U_llk(U_llk)  # arrange U as mode-wise
@@ -76,33 +100,58 @@ class static_ADF:
             ind_T, U_llk_m, U_llk_v
         )  # first and second moment of CP-pred
 
-        tau_a_del_T = (
-            self.a0
-            + self.tau_a_T[:T].sum()
-            + self.tau_a_T[T + 1 :].sum()
-            - self.N_time
-            + 1
-        )
-        tau_b_del_T = self.b0 + self.tau_b_T[:T].sum() + self.tau_b_T[T + 1 :].sum()
+        
+        # tau_a_del_T = (
+        #     self.a0
+        #     + self.tau_a_T[:T].sum()
+        #     + self.tau_a_T[T + 1 :].sum()
+        #     - self.N_time
+        #     + 1
+        # )
+        # tau_b_del_T = self.b0 + self.tau_b_T[:T].sum() + self.tau_b_T[T + 1 :].sum()
 
-        E_tau_del = tau_a_del_T / tau_b_del_T
+        # E_tau_del = tau_a_del_T / tau_b_del_T
         # print(E_tau_del)
 
-        log_Z = 0.5 * N_T * torch.log(E_tau_del / (2 * np.pi)) - 0.5 * E_tau_del * (
-            (y_T * y_T).sum() - 2 * (y_T * E_z_del).sum() + E_z_2_del.sum()
-        )
+        '''fang: try to fix tau first'''
+        E_tau_del = torch.tensor(torch.var(self.y_tr))
 
-        log_Z.backward()
 
-        # mu = E_z_del
-        # sigma = (1.0/E_tau_del) * torch.eye(N_T).double()+torch.diag(E_z_2_del)
+        # log_Z = 0.5 * N_T * torch.log(E_tau_del / (2 * np.pi)) - 0.5 * E_tau_del * (
+        #     (y_T * y_T).sum() - 2 * (y_T * E_z_del).sum() + E_z_2_del.sum()
+        # )
+
+        # log_Z.backward()
+
+        mu = E_z_del
+        y_v = E_z_2_del-mu**2
+        y_v = torch.nan_to_num(y_v, 1e0) + (1.0/E_tau_del)
+
+        # sigma = (1.0/E_tau_del) * torch.eye(N_T).double()+torch.diag(z_v)
+
+        # print('E_z_2_del',E_z_2_del)
+        # print('torch.square(mu)',torch.square(mu))
+
+        # sigma_diag = torch.diag(sigma)
+        # sigma_diag_psd = torch.where(sigma_diag>0,sigma_diag,1e0)
+        # sigma_psd= torch.diag(sigma_diag_psd)
+        
+        logZ = (
+            - 0.5 * torch.log(y_v)
+            - 0.5 / y_v * (y_T - mu) ** 2
+        ).sum()
+        
+        logZ.backward()
+
         # sample =  y_T
         # dist = torch.distributions.multivariate_normal.MultivariateNormal(mu, sigma)
         # log_Z_trans = dist.log_prob(sample)
 
+
         # log_Z_trans.backward()
 
         U_llk_grad = U_llk.grad
+
         U_llk_m_grad = U_llk_grad[: self.num_nodes]
         U_llk_v_grad = U_llk_grad[self.num_nodes :]
 
@@ -113,32 +162,35 @@ class static_ADF:
             torch.square(U_llk_m_grad) - 2 * U_llk_v_grad
         )
 
+        self.post_U_m = U_llk_m_star
+        self.post_U_v = U_llk_v_star
+
+
         # DAMPING
-        U_llk_v_inv = self.DAMPING * (1.0 / self.post_U_v) + (1 - self.DAMPING) * (
-            1.0 / U_llk_v_star
-        )
-        U_llk_v_inv_m = self.DAMPING * torch.div(self.post_U_m, self.post_U_v) + (
-            1 - self.DAMPING
-        ) * torch.div(U_llk_m_star, U_llk_v_star)
+        # U_llk_v_inv = self.DAMPING * (1.0 / self.post_U_v) + (1 - self.DAMPING) * (
+        #     1.0 / U_llk_v_star
+        # )
+        # U_llk_v_inv_m = self.DAMPING * torch.div(self.post_U_m, self.post_U_v) + (
+        #     1 - self.DAMPING
+        # ) * torch.div(U_llk_m_star, U_llk_v_star)
 
-        U_llk_v_inv = torch.where(U_llk_v_star > 0, U_llk_v_star, 1.0)
+        # U_llk_v_inv = torch.where(U_llk_v_star > 0, U_llk_v_star, 1.0)
 
-        self.post_U_m = torch.nan_to_num(torch.div(U_llk_v_inv_m, U_llk_v_inv))
-        self.post_U_v = torch.nan_to_num(1.0 / U_llk_v_inv)
+        # self.post_U_m = torch.nan_to_num(torch.div(U_llk_v_inv_m, U_llk_v_inv))
+        # self.post_U_v = torch.nan_to_num(1.0 / U_llk_v_inv)
 
-        a = 0.5 * N_T + 1
-        b = (
-            0.5
-            * ((y_T * y_T).sum() - 2 * (y_T * E_z_del).sum() + E_z_2_del.sum()).detach()
-        )
-        self.msg_update_tau(a, b, T)
+        # a = 0.5 * N_T + 1
+        # b = (
+        #     0.5
+        #     * ((y_T * y_T).sum() - 2 * (y_T * E_z_del).sum() + E_z_2_del.sum()).detach()
+        # )
+        # self.msg_update_tau(a, b, T)
 
     def ADF_update_N(self, n):
         # entry-wise update embedding
 
         ind = self.ind_tr[n]
         y = self.y_tr[n]
-        # print(ind)
         embed_m = []
         embed_v = []
 
@@ -189,7 +241,7 @@ class static_ADF:
         E_tau_del = tau_a_del_n / tau_b_del_n
 
         # fang: try to fix tau
-        # E_tau_del = torch.tensor(torch.var(self.y_tr))
+        E_tau_del = torch.tensor(torch.var(self.y_tr))
         # print(E_tau_del)
 
         """follow shandian's version"""
@@ -215,15 +267,6 @@ class static_ADF:
         for mode, dim in enumerate(self.ndims):
             grad_m = embed_m[mode].grad
             grad_v = embed_v[mode].grad
-            # torch.autograd.set_detect_anomaly(True)
-            # grad_m = torch.autograd.grad(log_Z, embed_m[mode], retain_graph=True)[
-            #     0
-            # ]  # embed_m[mode].grad
-            # grad_v = torch.autograd.grad(log_Z, embed_v[mode], retain_graph=True)[
-            #     0
-            # ]  # embed_v[mode].grad
-            #
-
             m_star = embed_m[mode] + embed_v[mode] * grad_m
             v_star = embed_v[mode] - torch.square(embed_v[mode]) * (
                 torch.square(grad_m) - 2 * grad_v
@@ -231,8 +274,10 @@ class static_ADF:
 
             v_star = torch.where(v_star > 0, v_star, 1e0)
 
-            self.post_U_m[start_idx + ind[mode], :] = m_star.detach().squeeze()
-            self.post_U_v[start_idx + ind[mode], :] = v_star.detach().squeeze()
+            # damping strategy (wrong, DAMPING should be applied in natural parameters format)
+            DAMPING = 0.1
+            self.post_U_m[start_idx + ind[mode], :] = DAMPING * self.post_U_m[start_idx + ind[mode], :] + (1-DAMPING)*m_star.detach().squeeze()
+            self.post_U_v[start_idx + ind[mode], :] = DAMPING * self.post_U_v[start_idx + ind[mode], :] + (1-DAMPING)*v_star.detach().squeeze()
 
             start_idx = start_idx + dim
 
@@ -243,7 +288,6 @@ class static_ADF:
         self.tau_b_N[n] = b
 
     def moment_product_U_del(self, ind_T, U_llk_T_m, U_llk_T_v):
-        # double check E_z_2:done
         # compute first and second moments of \Hadmard_prod_{k \in given modes} u_k -CP based on the U_llk_del
         # based on the U_llk_del (calibrating factors)
 
@@ -266,6 +310,9 @@ class static_ADF:
 
             E_z = E_z * E_u
             E_z_2 = E_z_2 * E_u_2
+
+        # return E_z, E_z_2
+        # return E_z.squeeze().sum(-1), torch.einsum("bii->b", E_z_2)
 
         # E(1^T z)^2 = trace (1*1^T* z^2)
         if self.R_U > 1:
