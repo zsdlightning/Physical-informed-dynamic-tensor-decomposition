@@ -16,6 +16,7 @@ import utils
 # import data_loader
 import time
 
+
 data_file = "../processed_data/beijing_15k.npy"
 # data_file = '../processed_data/mvlens_10k.npy'
 # data_file = '../processed_data/server_10k.npy'
@@ -52,8 +53,8 @@ else:
 
 data_dict["num_node"] = full_data["num_node"]
 
-# data_dict['time_id_table'] = full_data['time_id_table']
-# data_dict['time_uni'] = full_data['time_uni']
+data_dict['time_id_table'] = full_data['time_id_table']
+data_dict['time_uni'] = full_data['time_uni']
 
 hyper_dict = {}
 hyper_dict["device"] = torch.device("cpu")
@@ -68,20 +69,20 @@ EPOCH = 10
 
 model = static_ADF(data_dict, hyper_dict)
 
-# N_T = len(data_dict['time_uni'])
-# for epoch in tqdm.tqdm(range(EPOCH)):
-#     for T in range(N_T):
-#         model.ADF_update_T(T)\
-
-#         if T % 100 ==0:
-#             test_rmse = model.model_test()
-#             print('it: %d, T: %d test_rmse: %.4f '%(epoch,T,test_rmse))
-
-N = len(data_dict["tr_ind"])
+N_T = len(data_dict['time_uni'])
 for epoch in tqdm.tqdm(range(EPOCH)):
-    for n in range(N):
-        model.ADF_update_N(n)
+    for T in range(N_T):
+        model.ADF_update_T_n(T)\
 
-        if n % 2000 == 0:
+        if T % 100 ==0:
             test_rmse = model.model_test()
-            print("it: %d, n: %d test_rmse: %.4f " % (epoch, n, test_rmse))
+            print('it: %d, T: %d test_rmse: %.4f '%(epoch,T,test_rmse))
+
+# N = len(data_dict["tr_ind"])
+# for epoch in tqdm.tqdm(range(EPOCH)):
+#     for n in range(N):
+#         model.ADF_update_N(n)
+
+#         if n % 2000 == 0:
+#             test_rmse = model.model_test()
+#             print("it: %d, n: %d test_rmse: %.4f " % (epoch, n, test_rmse))
