@@ -9,11 +9,18 @@ from scipy import linalg
 from utils import build_id_key_table
 
 '''
-for the U_llk update, we aplly the ADF per data point instead of batching update 
+the decompose CP-form of dynamic tensor
+U(t) = CP ( U0 \circ Gamma(t) ) -- Gamma(t) size ?
+-- same with U0? (num_node * R, diag_var )  -> try this first
+-- with size num_node * 1 
+U0 update: standard CEP
+Gamma(t) update: mixup state-space-model inspired by graph-diffusion:
+-- ADF/CEP -base message passing update first.  -> try this first
+-- KF/RTS
 '''
 
 
-class Bayes_diffu_tensor:
+class Bayes_diffu_tensor_decomp:
     def __init__(self, data_dict, hyper_dict):
 
         # hyper-paras
@@ -33,6 +40,7 @@ class Bayes_diffu_tensor:
 
         self.ind_tr = data_dict["tr_ind"]
         self.y_tr = torch.tensor(data_dict["tr_y"]).to(self.device)  # N*1
+        self.N_tr = len(self.y_tr)
 
         self.ind_te = data_dict["te_ind"]
         self.y_te = torch.tensor(data_dict["te_y"]).to(self.device)  # N*1
@@ -56,86 +64,100 @@ class Bayes_diffu_tensor:
         # init the message factor of llk term (U_llk, tau)
         # and transition term (U_f: U_forard, U_b: U_backward)
 
-        # actually, it's the massage from llk-factor -> variabel U
+        # actually, it's the massage from llk-factor -> variabel Gamma
 
-        self.msg_U_llk_m = self.m0 * torch.rand(
+        self.msg_llk_2_Gamma_m = self.m0 * torch.rand(
             self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
-        self.msg_U_llk_v = self.v0 * torch.ones(
+        self.msg_llk_2_Gamma_v = self.v0 * torch.ones(
             self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
-
-        # self.msg_U_llk_m = [torch.rand(ndim,self.R_U,self.N_time).double().to(self.device) \
-        #     for ndim in self.ndims]
 
         self.msg_tau_a = torch.ones(self.N_time, 1).to(self.device)
         self.msg_tau_b = torch.ones(self.N_time, 1).to(self.device)
 
-        # actually, it's the massage from transition-factor -> variabel U
+        # actually, it's the massage from transition-factor -> variabel Gamma
+        # recall, there two kinds of msg: forward and backward
         # for here, we arrange the U-msg by concat-all-as-tensor for efficient computing in transition
         # recall, with Matern 23 kernel, msg_U_transition = [ U, U'], so the firsr-dim is 2*num_nodes
 
-        self.msg_U_f_m = self.m0 * torch.rand(
+        self.msg_Trans_f_Gamma_m = self.m0 * torch.rand(
             2 * self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
-        self.msg_U_f_v = self.v0 * torch.ones(
+        self.msg_Trans_f_Gamma_v = self.v0 * torch.ones(
             2 * self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
 
-        self.msg_U_b_m = self.m0 * torch.rand(
+        self.msg_Trans_b_Gamma_m = self.m0 * torch.rand(
             2 * self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
-        self.msg_U_b_v = self.v0 * torch.ones(
+        self.msg_Trans_b_Gamma_v = self.v0 * torch.ones(
             2 * self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
 
         # set the start and end factor
 
         for r in range(self.R_U):
-            self.msg_U_b_m[:, r, self.N_time - 1] = 0
-            self.msg_U_b_v[:, r, self.N_time - 1] = 1e8
+            self.msg_Trans_b_Gamma_m[:, r, self.N_time - 1] = 0
+            self.msg_Trans_b_Gamma_v[:, r, self.N_time - 1] = 1e8
 
-            self.msg_U_f_m[:, r, 0] = 0
-            self.msg_U_f_v[:, r, 0] = 1e8  # torch.diag(self.P_inf)
+            self.msg_Trans_f_Gamma_m[:, r, 0] = 0
+            self.msg_Trans_f_Gamma_v[:, r, 0] = 1e8  # torch.diag(self.P_inf)
 
         # init the calibrating factors / q_del in draft, init/update with current msg
 
-        # actually, it's the massage from variabel U -> llk-factor
-        self.msg_U_llk_m_del = (
+        # actually, it's the massage from variabel Gamma -> llk-factor
+        self.msg_Gamma_2_llk_m = (
             torch.rand(self.num_nodes, self.R_U, self.N_time).double().to(self.device)
         )
-        self.msg_U_llk_v_del = self.v0 * torch.ones(
+        self.msg_Gamma_2_llk_v = self.v0 * torch.ones(
             self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
+
 
         self.msg_tau_a_del_T = torch.ones(self.N_time, 1).to(self.device)
         self.msg_tau_b_del_T = torch.ones(self.N_time, 1).to(self.device)
 
-        # actually, it's the massage from variabel U -> trans-factor
-        self.msg_U_f_m_del = self.m0 * torch.rand(
+
+        # actually, it's the massage from variabel Gamma -> trans-factor
+        # recall, there two kinds of msg: forward and backward
+        self.msg_Gamma_f_Trans_m = self.m0 * torch.rand(
             2 * self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
-        self.msg_U_f_v_del = self.v0 * torch.ones(
+        self.msg_Gamma_f_Trans_v = self.v0 * torch.ones(
             2 * self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
 
-        self.msg_U_b_m_del = self.m0 * torch.rand(
+        self.msg_Gamma_b_Trans_m = self.m0 * torch.rand(
             2 * self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
-        self.msg_U_b_v_del = self.v0 * torch.ones(
+        self.msg_Gamma_b_Trans_m = self.v0 * torch.ones(
             2 * self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
 
-        # as the computing of msg_tau_del is trival, we don't assign extra varb for it
 
-        # init the post. U
+        # init the message of U over each training data (using natural paras) 
+        self.msg_U_lam = [1e-4*torch.eye(self.R_U).reshape((1,self.R_U,self.R_U)).repeat(self.N,1,1).double().to(self.device) for i in range(self.nmod) ] # (N*R_U*R_U)*nmod
+        self.msg_U_eta =  [torch.zeros(self.N,self.R_U,1).double().to(self.device) for i in range(self.nmod)] # (N*R_U*1)*nmod
+
+        # init the post. U and post. Gamma
 
         self.post_U_m = [
-            torch.rand(ndim, self.R_U, self.N_time).double().to(self.device)
+            torch.rand(ndim, self.R_U, 1).double().to(self.device)
             for ndim in self.ndims
         ]
 
         self.post_U_v = [
+            torch.ones(ndim, self.R_U, 1).double().to(self.device)
+            for ndim in self.ndims
+        ]
+
+        self.post_Gamma_m = [
+            torch.rand(ndim, self.R_U, self.N_time).double().to(self.device)
+            for ndim in self.ndims
+        ]
+
+        self.post_Gamma_v = [
             torch.ones(ndim, self.R_U, self.N_time).double().to(self.device)
             for ndim in self.ndims
         ]
@@ -245,6 +267,7 @@ class Bayes_diffu_tensor:
             start_idx = start_idx + dim
 
 
+    def 
 
 
         

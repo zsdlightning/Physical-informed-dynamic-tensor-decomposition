@@ -8,7 +8,7 @@ import utils
 from utils import generate_state_space_Matern_23
 from scipy import linalg
 from utils import build_id_key_table
-from model_Bayes_diffusion_single import Bayes_diffu_tensor
+from model_Bayes_diffusion_decomp import Bayes_diffu_tensor_decomp as Bayes_diffu_tensor
 import tqdm
 
 torch.manual_seed(123)
@@ -57,7 +57,6 @@ F,P_inf = utils.generate_state_space_Matern_23(data_dict,hyper_dict)
 data_dict['F'] = F
 data_dict['P_inf'] = P_inf
 
-
 N_T = len(data_dict['time_uni'])
 
 model = Bayes_diffu_tensor(data_dict,hyper_dict)
@@ -67,63 +66,39 @@ print('init state: test_rmse: %.4f '%(test_rmse))
 
 EPOCH = 50
 for epoch in tqdm.tqdm(range(EPOCH)):
-#     # forward
-    for T in range(N_T):
-        
-        
-        model.msg_update_U_llk_del(T)
-        model.msg_update_U_llk(T)
 
-        if T<N_T-1:
-            model.msg_update_U_trans_del(T,mode='forward')
-
-            # model.msg_update_U_trans(T,mode='forward')
-            # model.msg_update_U_trans_vec(T,mode='forward')
-            # model.msg_update_U_trans_linear(T,mode='forward')
-            model.msg_update_U_trans_EP(T,mode='forward')
-
-
-    model.msg_update_U_trans_del(N_T-1,mode='backward')
+    # CEP update on U (static Embedding)
     
-    model.post_update_U()
+    '''include update of msg_U and msg_llk_2_Gamma'''
+    # model.msg_update_llk()
+
+    model.msg_update_llk_2_U()
+    model.post_update_llk_2_Gamma()
+
+    # forward-backward message-passing update on msg_Gamma
+
+    # forward
+    for T in range(N_T-1):
+
+        model.msg_update_Gamma_f_Trans(T)
+        model.msg_update_Trans_f_Gamma(T)
+
+    model.msg_update_Gamma_2_llk(N_T-1)
+    
+    model.post_update_Gamma()    
     test_rmse = model.model_test()
     print('it-half: %d, test_rmse: %.4f '%(epoch,test_rmse))    
 
     # backward 
     for T in reversed(range(N_T-1)):
-        
-        model.msg_update_U_trans_linear(T,mode='backward')
-        # model.msg_update_U_trans_vec(T,mode='backward')
-        # model.msg_update_U_trans(T,mode='backward')
-        # model.msg_update_U_trans_EP(T,mode='backward')
-
-
-        # model.msg_update_U_llk_del(T)
-        # model.msg_update_U_llk(T)
-
-        model.msg_update_U_trans_del(T,mode='backward')
+        model.msg_update_Gamma_b_Trans(T)
+        model.msg_update_Trans_b_Gamma(T)
+        model.msg_update_Gamma_2_llk(T)
 
 
     model.post_update_U()
+    model.post_update_Gamma()
+
     test_rmse = model.model_test()
     print('it %d, test_rmse: %.4f '%(epoch,test_rmse))
 
-    #     utils.nan_check_1(model,T)
-
-    # for T in range(N_T):
-
-        
-    #     model.msg_update_U_llk(T)
-    #     model.msg_update_U_trans_del(T,mode='forward')
-        
-    # model.post_update_U()
-    # test_rmse = model.model_test()
-    # print('it-half: %d, test_rmse: %.4f '%(epoch,test_rmse))
-
-    # for T in range(N_T-1):
-    #     model.msg_update_U_llk_del(T)
-    #     model.msg_update_U_trans_linear(T,mode='forward')
-
-    # model.post_update_U()
-    # test_rmse = model.model_test()
-    # print('it %d, test_rmse: %.4f '%(epoch,test_rmse))
