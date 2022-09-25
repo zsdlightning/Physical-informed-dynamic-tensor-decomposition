@@ -28,8 +28,8 @@ full_data = np.load(data_file, allow_pickle=True).item()
 fold = 0
 R_U = 2
 
-# mode = "static"
-mode = "discret_time"  # add the discrete timestamp as extra mode
+mode = "static"
+# mode = "discret_time"  # add the discrete timestamp as extra mode
 
 
 # here should add one more data-loader class
