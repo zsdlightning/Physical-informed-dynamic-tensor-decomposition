@@ -248,8 +248,8 @@ def moment_Hadmard(
 
     :param modes: list of target mode
     :param ind: index of tensor entries     : shape (N, nmod)
-    :param U_m: mean of U                   : shape (nmod,R_U,1)
-    :param U_v: var of U (diag)             : shape (nmod,R_U,1) or (nmod,R_U,R_U)
+    :param U_m: mean of U-list              : shape [(ndim,R_U,1)..]
+    :param U_v: var of U (diag)-list        : shape [(ndim,R_U,1).. or (ndim,R_U,R_U)]
     :param order: oder of expectated order  : "first" or "second"
     :param sum_2_scaler: flag on whether sum the moment 2 scaler  : Bool
 
@@ -270,9 +270,9 @@ def moment_Hadmard(
 
     last_mode = modes[-1]
 
-    diag_cov = True if U_v.size()[-1] == 1 else False
+    diag_cov = True if U_v[0].size()[-1] == 1 else False
 
-    R_U = U_v.size()[1]
+    R_U = U_v[0].size()[1]
 
     if order == "first":
         # only compute the first order moment
@@ -293,7 +293,7 @@ def moment_Hadmard(
         if diag_cov:
             # diagnal cov
             E_z_2 = torch.diag_embed(
-                U_v[last_mode][ind[:, last_mode]], dim1=1
+                U_v[last_mode][ind[:, last_mode]].squeeze(), dim1=1
             ) + torch.bmm(
                 E_z, E_z.transpose(dim0=1, dim1=2)
             )  # N*R_u*R_U
@@ -311,13 +311,13 @@ def moment_Hadmard(
             if diag_cov:
 
                 E_u_2 = torch.diag_embed(
-                    U_v[last_mode][ind[:, last_mode]], dim1=1
+                    U_v[mode][ind[:, mode]].squeeze(), dim1=1
                 ) + torch.bmm(
                     E_u, E_u.transpose(dim0=1, dim1=2)
                 )  # N*R_u*R_U
 
             else:
-                E_u_2 = U_v[last_mode][ind[:, last_mode]] + torch.bmm(
+                E_u_2 = U_v[mode][ind[:, mode]] + torch.bmm(
                     E_u, E_u.transpose(dim0=1, dim1=2)
                 )  # N*R_u*R_U
 
@@ -336,3 +336,123 @@ def moment_Hadmard(
             )  # N*R_u*R_u -> -> N*1
 
         return E_z, E_z_2
+
+
+def moment_Hadmard_T(
+    modes,
+    ind,
+    ind_T,
+    U_m_T,
+    U_v_T,
+    order="first",
+    sum_2_scaler=True,
+    device=torch.device("cpu"),
+):
+    """
+    -compute first and second moments of \Hadmard_prod_{k \in given modes} Gamma_k(t) -CP style
+    -can be used to compute full-mode / calibrating-mode of gamma ?
+
+    :param modes: list of target mode
+    :param ind: index of tensor entries              : shape (N, nmod)
+    :param tid: list of time-stamp index of entries      : shape (N, 1)
+    :param U_m: mode-wise U-mean-list                : shape [(ndim,R_U,1,T)..]
+    :param U_v: mode-wise U-var-list (full or diag)  : shape [(ndim,R_U,1,T).. or (ndim,R_U,R_U,T)]
+    :param order: oder of expectated order  : "first" or "second"
+    :param sum_2_scaler: flag on whether sum the moment 2 scaler  : Bool
+
+    retrun:
+    --if sum_2_scaler is True
+    : E_z: first moment of 1^T (\Hadmard_prod)  : shape (N, 1)
+    : E_z_2: second moment 1^T (\Hadmard_prod)  : shape (N, 1)
+
+    --if sum_2_scaler is False
+    : E_z: first moment of \Hadmard_prod   : shape (N, R_U, 1)
+    : E_z_2: second moment of \Hadmard_prod: shape (N, R_U, R_U)
+
+    it's easy to transfer this function to kronecker_product(Tucker form) by changing Hadmard_product_batch to kronecker_product_einsum_batched
+
+    """
+    assert order in {"first", "second"}
+    assert sum_2_scaler in {True, False}
+
+    last_mode = modes[-1]
+
+    diag_cov = True if U_v[0].size()[-2] == 1 else False
+
+    R_U = U_v[0].size()[1]
+
+    if order == "first":
+        # only compute the first order moment
+
+        E_z = U_m[last_mode][ind[:, last_mode], :, :, tid]  # N*R_u*1
+
+        for mode in reversed(modes[:-1]):
+            E_u = U_m[mode][ind[:, mode], :, :, tid]  # N*R_u*1
+            E_z = Hadamard_product_batch(E_z, E_u)  # N*R_u*1
+
+        return E_z.sum(dim=1) if sum_2_scaler else E_z
+
+    elif order == "second":
+        # compute the second order moment E_z / E_z_2
+
+        E_z = U_m[last_mode][ind[:, last_mode], :, :, tid]  # N*R_u*1
+
+        if diag_cov:
+            # diagnal cov
+            E_z_2 = torch.diag_embed(
+                U_v[last_mode][ind[:, last_mode], :, :, tid].squeeze(), dim1=1
+            ) + torch.bmm(
+                E_z, E_z.transpose(dim0=1, dim1=2)
+            )  # N*R_u*R_U
+
+        else:
+            # full cov
+            E_z_2 = U_v[last_mode][ind[:, last_mode], :, :, tid] + torch.bmm(
+                E_z, E_z.transpose(dim0=1, dim1=2)
+            )  # N*R_u*R_U
+
+        for mode in reversed(modes[:-1]):
+
+            E_u = U_m[mode][ind[:, mode], :, :, tid]  # N*R_u*1
+
+            if diag_cov:
+
+                E_u_2 = torch.diag_embed(
+                    U_v[mode][ind[:, mode], :, :, tid].squeeze(), dim1=1
+                ) + torch.bmm(
+                    E_u, E_u.transpose(dim0=1, dim1=2)
+                )  # N*R_u*R_U
+
+            else:
+                E_u_2 = U_v[mode][ind[:, last_mode], :, :, tid] + torch.bmm(
+                    E_u, E_u.transpose(dim0=1, dim1=2)
+                )  # N*R_u*R_U
+
+            E_z = Hadamard_product_batch(E_z, E_u)  # N*R_u*1
+            E_z_2 = Hadamard_product_batch(E_z_2, E_u_2)  # N*R_u*R_u
+
+        if sum_2_scaler:
+            E_z = E_z.sum(dim=1)  # N*R_u*1 -> N*1
+
+            # E(1^T z)^2 = trace (1*1^T* z^2)
+
+            E_z_2 = torch.einsum(
+                "bii->b", torch.matmul(E_z_2, torch.ones(R_U, R_U).to(device))
+            ).unsqueeze(
+                -1
+            )  # N*R_u*R_u -> -> N*1
+
+        return E_z, E_z_2
+
+
+def aug_time_index(tid, nmod):
+    """augmentate batch time-stamp id to tensor-entry-id format
+    :paras tid    : list of batch time-stamp id  :shape: N*1
+    :paras nmod   : number of modes to augmentate
+
+    :return aug_tid  :shape: N*nmod
+
+    """
+    tid_aug = np.stack([tid for i in range(nmod)], axis=1)
+
+    return tid_aug

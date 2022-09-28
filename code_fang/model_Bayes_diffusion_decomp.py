@@ -8,7 +8,7 @@ from utils import generate_state_space_Matern_23
 from scipy import linalg
 from utils import build_id_key_table, moment_Hadmard
 
-'''
+"""
 the decompose CP-form of dynamic tensor
 U(t) = CP ( U0 \circ Gamma(t) ) -- Gamma(t) size ?
 -- same with U0? (num_node * R, diag_var )  -> try this first
@@ -17,7 +17,7 @@ U0: base embedding, update with standard CEP
 Gamma(t): dynamic weighting, update by mixup state-space-model inspired by graph-diffusion:
 -- ADF/CEP -base message passing update first.  -> try this first
 -- KF/RTS
-'''
+"""
 
 
 class Bayes_diffu_tensor_decomp:
@@ -33,7 +33,7 @@ class Bayes_diffu_tensor_decomp:
         self.b0 = hyper_dict["b0"]
 
         self.m0 = torch.tensor(1.0)
-        self.v0 = torch.tensor(1e1) # sentitive variable
+        self.v0 = torch.tensor(1e1)  # sentitive variable
 
         # data-dependent paras
         self.data_dict = data_dict
@@ -49,6 +49,7 @@ class Bayes_diffu_tensor_decomp:
 
         self.ndims = data_dict["ndims"]
         self.nmod = len(self.ndims)
+        self.modes = [i for i in range(self.nmod)]
         self.num_nodes = sum(self.ndims)
 
         self.train_time_ind = data_dict["tr_T_disct"]  # N*1
@@ -114,10 +115,8 @@ class Bayes_diffu_tensor_decomp:
             self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
 
-
         self.msg_tau_a_del_T = torch.ones(self.N_time, 1).to(self.device)
         self.msg_tau_b_del_T = torch.ones(self.N_time, 1).to(self.device)
-
 
         # actually, it's the massage from variabel Gamma -> trans-factor
         # recall, there two kinds of msg: forward and backward
@@ -135,10 +134,20 @@ class Bayes_diffu_tensor_decomp:
             2 * self.num_nodes, self.R_U, self.N_time
         ).double().to(self.device)
 
-
-        # init the message of U over each training data (using natural paras) 
-        self.msg_U_lam = [1e-4*torch.eye(self.R_U).reshape((1,self.R_U,self.R_U)).repeat(self.N,1,1).double().to(self.device) for i in range(self.nmod) ] # (N*R_U*R_U)*nmod
-        self.msg_U_eta =  [torch.zeros(self.N,self.R_U,1).double().to(self.device) for i in range(self.nmod)] # (N*R_U*1)*nmod
+        # init the message of U over each training data (using natural paras)
+        self.msg_U_lam = [
+            1e-4
+            * torch.eye(self.R_U)
+            .reshape((1, self.R_U, self.R_U))
+            .repeat(self.N, 1, 1)
+            .double()
+            .to(self.device)
+            for i in range(self.nmod)
+        ]  # (N*R_U*R_U)*nmod
+        self.msg_U_eta = [
+            torch.zeros(self.N, self.R_U, 1).double().to(self.device)
+            for i in range(self.nmod)
+        ]  # (N*R_U*1)*nmod
 
         # init the post. U and post. Gamma
 
@@ -153,24 +162,98 @@ class Bayes_diffu_tensor_decomp:
         ]
 
         self.post_Gamma_m = [
-            torch.rand(ndim, self.R_U, self.N_time).double().to(self.device)
+            torch.ones(ndim, self.R_U, 1, self.N_time).double().to(self.device)
             for ndim in self.ndims
         ]
 
+        # if use full-cov, set size as (ndim, R_U,R_U,self.N_time)
         self.post_Gamma_v = [
-            torch.ones(ndim, self.R_U, self.N_time).double().to(self.device)
+            torch.ones(ndim, self.R_U, 1, self.N_time).double().to(self.device)
             for ndim in self.ndims
         ]
 
-        # time-data table
-        # Given a time id, return the indexed of entries
-        # self.uid_table, self.data_table = build_id_key_table(self.nmod,self.ind_tr)
+        """
+         build some check-index tables
+        # uid_table: store the id of unique embedding (U)
+        # data_table: Given the uid , return the indexed of associated entries  
+        # time_data_table: Given a time id, return the indexed of entries
+
+        """
+
+        self.uid_table, self.data_table = build_id_key_table(self.nmod, self.ind_tr)
         self.time_data_table_tr = utils.build_time_data_table(self.train_time_ind)
         self.time_data_table_te = utils.build_time_data_table(self.test_time_ind)
 
+        # Place-holder, moments of crucial mid-vars, may not use
+        # alpha = \Hadmard_prod_{i in modes} U_i
+        # beta = \Hadmard_prod_{i in modes} Gamma_i(t)
+        # z = \Hadmard_prod_{i in modes} U_i
 
+        self.E_alpha = None
+        self.E_alpha_2 = None
 
-    def msg_update_U_llk_single(self,eind_T,T):
+        self.E_beta = None
+        self.E_beta_2 = None
+
+        self.E_tau = 1
+
+    def msg_update_llk_2_U(self):
+        # first try : apply CEP to update all msg: llk->U in parallel-- similar to BCTT
+        # candicate: sequtial ADF update
+
+        # self.E_beta,self.E_beta_2 = moment_Hadmard(self.modes)
+
+        for mode in self.modes:
+
+            for j in range(len(self.uid_table[mode])):
+
+                uid = self.uid_table[mode][j]  # id of current embedding
+                eid = self.data_table[mode][j]  # id of associated entries
+                tid_batch = self.train_time_ind[eid]  # id of time-stamp of entries
+
+                ind_batch = self.ind_tr[eid]
+
+                E_beta, E_beta_2 = utils.moment_Hadmard_T(
+                    self.modes,
+                    ind_batch,
+                    tid_batch,
+                    self.post_Gamma_m,
+                    self.post_Gamma_v,
+                    order="second",
+                    sum_2_scaler=False,
+                )  # size: (num_eid, R_U, 1) and (num_eid, R_U, R_U)
+
+                del_modes = self.modes.copy().remove(mode)
+
+                E_alpha_del, E_alpha_2_del = utils.moment_Hadmard(
+                    del_modes,
+                    ind_batch,
+                    self.post_U_m,
+                    self.post_U_v,
+                    order="second",
+                    sum_2_scaler=False,
+                )  # size: (num_eid, R_U, 1) and (num_eid, R_U, R_U)
+
+                # compute msg of associated entries,
+                msg_U_lam_new = (
+                    self.E_tau * E_beta_2 * E_alpha_2_del
+                )  # num_eid * R_U * R_U
+
+                msg_U_eta_new = self.E_tau * torch.bmm(
+                    E_alpha_del * E_beta, self.y_tr[eid].unsqueeze(-1)
+                )  # num_eid * R_U *1
+
+                #  update with damping
+                self.msg_U_lam[mode][eid] = (
+                    self.DAMPPING_U * self.msg_U_lam[mode][eid]
+                    + (1 - self.DAMPPING_U) * msg_U_lam_new
+                )  # num_eid * R_U * R_U
+                self.msg_U_eta[mode][eid] = (
+                    self.DAMPPING_U * self.msg_U_eta[mode][eid]
+                    + (1 - self.DAMPPING_U) * msg_U_eta_new
+                )  # num_eid * R_U * 1
+
+    def msg_update_U_llk_single(self, eind_T, T):
 
         ind_T = self.ind_tr[eind_T]
         y_T = self.y_tr[eind_T].squeeze()
@@ -181,7 +264,7 @@ class Bayes_diffu_tensor_decomp:
         for mode, dim in enumerate(self.ndims):
 
             U_m = (
-                self.msg_U_llk_m_del[start_idx + ind_T[mode],:,T]
+                self.msg_U_llk_m_del[start_idx + ind_T[mode], :, T]
                 .reshape(-1, 1)
                 .clone()
                 .detach()
@@ -189,7 +272,7 @@ class Bayes_diffu_tensor_decomp:
             )
 
             U_v = (
-                self.msg_U_llk_v_del[start_idx + ind_T[mode],:,T]
+                self.msg_U_llk_v_del[start_idx + ind_T[mode], :, T]
                 .reshape(-1, 1)
                 .clone()
                 .detach()
@@ -214,10 +297,10 @@ class Bayes_diffu_tensor_decomp:
         E_z = E_z.sum()
         E_z_2 = E_z_2.sum()
 
-        '''fang: try to fix tau now, add update later'''
+        """fang: try to fix tau now, add update later"""
         E_tau_del = torch.tensor(torch.var(self.y_tr))
 
-        '''fang: standard ADF with single step update'''
+        """fang: standard ADF with single step update"""
         mu = E_z
         sigma = torch.sqrt((1.0 / E_tau_del) + E_z_2 - E_z**2)
         sample = y_T
@@ -234,54 +317,55 @@ class Bayes_diffu_tensor_decomp:
                 torch.square(grad_m) - 2 * grad_v
             )
 
-            
-            '''' msg update: U_llk =  f_star / f_del (use natural parameters)'''
-            msg_U_llk_v_inv_new = 1.0/v_star - 1.0/embed_v[mode]
-            msg_U_llk_v_inv_m_new = torch.div(m_star,v_star) - torch.div(embed_m[mode],embed_v[mode])
+            """' msg update: U_llk =  f_star / f_del (use natural parameters)"""
+            msg_U_llk_v_inv_new = 1.0 / v_star - 1.0 / embed_v[mode]
+            msg_U_llk_v_inv_m_new = torch.div(m_star, v_star) - torch.div(
+                embed_m[mode], embed_v[mode]
+            )
 
             # Damping & neg-var check in natural-paras
-            msg_U_llk_v_inv_old = (1.0 / self.msg_U_llk_v[start_idx + ind_T[mode],:, T]).reshape(-1, 1)
+            msg_U_llk_v_inv_old = (
+                1.0 / self.msg_U_llk_v[start_idx + ind_T[mode], :, T]
+            ).reshape(-1, 1)
 
-            msg_U_llk_v_inv_m_old  = torch.div(self.msg_U_llk_m[start_idx + ind_T[mode],:, T], self.msg_U_llk_v[start_idx + ind_T[mode],:, T]).reshape(-1, 1)
-
-
+            msg_U_llk_v_inv_m_old = torch.div(
+                self.msg_U_llk_m[start_idx + ind_T[mode], :, T],
+                self.msg_U_llk_v[start_idx + ind_T[mode], :, T],
+            ).reshape(-1, 1)
 
             msg_U_llk_v_inv = (
                 self.DAMPING * msg_U_llk_v_inv_old
                 + (1 - self.DAMPING) * msg_U_llk_v_inv_new
             )
             msg_U_llk_v_inv_m = (
-                self.DAMPING
-                * msg_U_llk_v_inv_m_old
+                self.DAMPING * msg_U_llk_v_inv_m_old
                 + (1 - self.DAMPING) * msg_U_llk_v_inv_m_new
             )
 
-            # transform natrual paras back to mean/var 
+            # transform natrual paras back to mean/var
             msg_U_llk_v_inv = torch.where(msg_U_llk_v_inv > 0, msg_U_llk_v_inv, 1e0)
 
-            self.msg_U_llk_v[start_idx + ind_T[mode], :, T] = torch.nan_to_num(1.0 / msg_U_llk_v_inv).detach().squeeze()
+            self.msg_U_llk_v[start_idx + ind_T[mode], :, T] = (
+                torch.nan_to_num(1.0 / msg_U_llk_v_inv).detach().squeeze()
+            )
 
-            self.msg_U_llk_m[start_idx + ind_T[mode], :, T] = torch.nan_to_num(
-            (1.0 / msg_U_llk_v_inv) * msg_U_llk_v_inv_m).detach().squeeze()
+            self.msg_U_llk_m[start_idx + ind_T[mode], :, T] = (
+                torch.nan_to_num((1.0 / msg_U_llk_v_inv) * msg_U_llk_v_inv_m)
+                .detach()
+                .squeeze()
+            )
 
             start_idx = start_idx + dim
-
-
-    def 
-
-
-        
 
     def msg_update_U_llk(self, T):
 
         # retrive the observed entries at T
-        eind_T_list = self.time_data_table_tr[T]  # id of observed entries at this time-stamp
-        
+        eind_T_list = self.time_data_table_tr[
+            T
+        ]  # id of observed entries at this time-stamp
 
         for eind in eind_T_list:
-            self.msg_update_U_llk_single(eind,T)
-
-
+            self.msg_update_U_llk_single(eind, T)
 
         # we also update the tau here
         # a = 0.5 * N_T + 1
@@ -631,8 +715,7 @@ class Bayes_diffu_tensor_decomp:
 
             ind_T = self.ind_te[eind_T]
 
-            
-            U_post_m_T = [item[:, :,T] for item in self.post_U_m]
+            U_post_m_T = [item[:, :, T] for item in self.post_U_m]
 
             # U_post_v = model.post_U_v[:,:,T]
 
@@ -653,7 +736,7 @@ class Bayes_diffu_tensor_decomp:
         return rmse
 
     def msg_update_U_trans_EP(self, T, mode="forward"):
-        '''applp EP to update the msg of tranfer var'''
+        """applp EP to update the msg of tranfer var"""
 
         time_gap = self.time_uni[T + 1] - self.time_uni[T]
         A_T = torch.matrix_exp(self.F * time_gap)
@@ -678,22 +761,17 @@ class Bayes_diffu_tensor_decomp:
                 self.msg_U_f_m[:, r, T + 1] = (A_T @ msg_m_l.view(-1, 1)).squeeze()
                 self.msg_U_f_v[:, r, T + 1] = msg_v_l
 
-                
-                
             else:
                 # in the backward pass, we only update the msg to left (U_{T})
-                
+
                 # self.msg_U_f_m[:, r, T] = torch.linalg.solve(A_T,msg_m_r)
-                
+
                 A_T_inv = torch.linalg.inv(A_T)
                 self.msg_U_f_m[:, r, T] = (A_T_inv @ msg_m_r.view(-1, 1)).squeeze()
 
                 self.msg_U_f_v[:, r, T] = msg_v_r
 
-            
-
     def msg_update_U_trans(self, T, mode="forward"):
-        
 
         time_gap = self.time_uni[T + 1] - self.time_uni[T]
         A_T = torch.matrix_exp(self.F * time_gap)
@@ -726,7 +804,7 @@ class Bayes_diffu_tensor_decomp:
                 target_v = msg_v_l
 
             mu = (A_T @ msg_m_l.view(-1, 1)).squeeze()  # num_node * 1
-            sigma = torch.diag(msg_v_r) + Q_T + A_T @ torch.diag(msg_v_l) @ A_T.T 
+            sigma = torch.diag(msg_v_r) + Q_T + A_T @ torch.diag(msg_v_l) @ A_T.T
             sample = msg_m_r
 
             # compute log-Z
@@ -763,8 +841,6 @@ class Bayes_diffu_tensor_decomp:
                 self.msg_U_b_m[:, r, T] = torch.nan_to_num(
                     (1.0 / target_v_inv_new) * target_v_inv_m_new
                 )
-
-
 
     def msg_update_U_trans_linear(self, T, mode="forward"):
 
