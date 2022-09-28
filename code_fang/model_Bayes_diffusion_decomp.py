@@ -6,15 +6,15 @@ import torch
 import utils
 from utils import generate_state_space_Matern_23
 from scipy import linalg
-from utils import build_id_key_table
+from utils import build_id_key_table, moment_Hadmard
 
 '''
 the decompose CP-form of dynamic tensor
 U(t) = CP ( U0 \circ Gamma(t) ) -- Gamma(t) size ?
 -- same with U0? (num_node * R, diag_var )  -> try this first
 -- with size num_node * 1 
-U0 update: standard CEP
-Gamma(t) update: mixup state-space-model inspired by graph-diffusion:
+U0: base embedding, update with standard CEP
+Gamma(t): dynamic weighting, update by mixup state-space-model inspired by graph-diffusion:
 -- ADF/CEP -base message passing update first.  -> try this first
 -- KF/RTS
 '''
@@ -316,7 +316,7 @@ class Bayes_diffu_tensor_decomp:
 
         return U_llk_del_T_m, U_llk_del_T_v
 
-    def moment_product_U_del(self, ind_T, U_llk_T_m, U_llk_T_v):
+    def moment_product_U(self, ind_T, U_llk_T_m, U_llk_T_v):
         # compute first and second moments of \Hadmard_prod_{k \in given modes} u_k -CP based on the U_llk_del
         # based on the U_llk_del (calibrating factors)
 

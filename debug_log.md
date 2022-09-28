@@ -30,5 +30,8 @@ To-do-list:
 
 To-do-list-"decomp-CP-idea":
 - finish the key msg_update_functions 
+    - finish the ultis- moment_Hadmard, the unified func to compute the moments of U/Gamma
+- excution order of msg_update_llk_2_U(), msg_update_llk_2_Gamma(), post_update_U(), post_update_Gamma()
+    - follow the BCTT? parallel phase: msg_update_llk_2_U()->post_update_U() || seq phase: msg_update_llk_2_Gamma(T)
 - model_test function
 - key ulti func: moment_product_U, moment_product_Gamma -> how to use them to get parallel CEP update    
