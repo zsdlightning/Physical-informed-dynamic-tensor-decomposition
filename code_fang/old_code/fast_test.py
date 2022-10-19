@@ -46,10 +46,10 @@ hyper_dict['device'] = torch.device("cpu") # CPU IS MUCH FASTER
 
 
 hyper_dict['R_U'] = 2 # dim of each node embedding
-hyper_dict['c'] = 10 # diffusion rate
+hyper_dict['c'] = 0.01 # diffusion rate
 hyper_dict['a0']=1.0
 hyper_dict['b0']=1.0
-hyper_dict['DAMPING']=0.8
+hyper_dict['DAMPING']=0.3
 
 
 F,P_inf = utils.generate_state_space_Matern_23(data_dict,hyper_dict)
@@ -98,8 +98,8 @@ for epoch in tqdm.tqdm(range(EPOCH)):
         # model.msg_update_U_trans_EP(T,mode='backward')
 
 
-        # model.msg_update_U_llk_del(T)
-        # model.msg_update_U_llk(T)
+        model.msg_update_U_llk_del(T)
+        model.msg_update_U_llk(T)
 
         model.msg_update_U_trans_del(T,mode='backward')
 
