@@ -12,8 +12,9 @@ inference is achieved by alternatively apply Bayesian filter & smooth)
 
 
 To-do-list:
--class of LDS_dynamic_CP
 -data and config loading 
+-debug
+-test 
 
 
 Unit-Test-list of "decomp-CP":
