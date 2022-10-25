@@ -14,7 +14,7 @@ inference is achieved by alternatively apply Bayesian filter & smooth)
 To-do-list:
 -data and config loading 
 -debug
--test 
+-test:done 
 
 
 Unit-Test-list of "decomp-CP":

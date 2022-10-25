@@ -25,7 +25,7 @@ class LDS_GP():
     def __init__(self,hyper_para_dict):
         self.device = hyper_para_dict['device'] # add the cuda version later 
 
-        self.N = hyper_para_dict['N'] # number of data-llk
+        # self.N = hyper_para_dict['N'] # number of data-llk
         self.N_time = hyper_para_dict['N_time'] # number of total states
 
         self.F = hyper_para_dict['F'].double().to(self.device) # transition mat-SDE
@@ -54,8 +54,6 @@ class LDS_GP():
 
         self.reset_list()
 
-        self.train_time = hyper_para_dict['train_time']
-        self.test_time = hyper_para_dict['test_time']
 
     def reset_list(self):
         self.m = self.m_0 # store the current state(mean)

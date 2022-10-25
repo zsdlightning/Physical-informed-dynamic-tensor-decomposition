@@ -3,7 +3,138 @@ import torch
 import utils
 import scipy
 from scipy import linalg
+import argparse
 from torch.utils.data import Dataset
+
+
+def make_hyper_dict(config, args=None):
+    hyper_dict = config
+
+    if config["device"] == "cpu":
+        hyper_dict["device"] = torch.device("cpu")
+    else:
+        hyper_dict["device"] = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+    print("use device:", hyper_dict["device"])
+
+    assert hyper_dict["kernel"] in {"Matern_23", "Matern_21", "mix"}
+
+    if hyper_dict["kernel"] == "Matern_21":
+        hyper_dict["FACTOR"] = 1
+    else:
+        hyper_dict["FACTOR"] = 2
+
+    """to be add mix kernel !! with graph constrain"""
+
+    # hyper_dict["R_U"] = args.R_U
+
+    return hyper_dict
+
+
+def make_data_dict(hyper_dict, data_path, fold=0, args=None):
+    """to be polish"""
+    full_data = np.load(data_path, allow_pickle=True).item()
+
+    # here should add one more data-loader class
+    data_dict = full_data["data"][fold]
+
+    data_dict["ndims"] = full_data["ndims"]
+    data_dict["time_id_table"] = full_data["time_id_table"]
+    data_dict["time_uni"] = full_data["time_uni"]
+
+    # data_dict["fix_int"] = args.fix_int
+    data_dict["fix_int"] = hyper_dict["fix_int"]
+
+    data_dict["LDS_init_list"] = [
+        make_LDS_paras(dim, hyper_dict, data_dict) for dim in data_dict["ndims"]
+    ]
+
+    return data_dict
+
+
+def make_LDS_paras(dim, hyper_dict, data_dict):
+    LDS_init = {}
+    LDS_init["device"] = hyper_dict["device"]
+    LDS_init["N_time"] = len(data_dict["time_uni"])
+
+    if hyper_dict["time_type"] == "continues":
+        train_time = torch.tensor(data_dict["time_uni"])
+    else:
+        train_time = torch.arange(LDS_init["N_time"])
+
+    # build the list which store all the time-step intervals
+    if data_dict["fix_int"]:
+        # fix-time-interval setting
+        fix_int = torch.abs(train_time[1] - train_time[0]).squeeze()
+        time_int_list = fix_int * torch.ones(LDS_init["N_time"])
+    else:
+        # non-fix-time-interval setting, compute the gap between each two time-stamps
+        fix_int = None
+        time_int_list_follow = [
+            train_time[i + 1] - train_time[i] for i in range(LDS_init["N_time"] - 1)
+        ]
+        time_int_list = torch.tensor([0.0] + time_int_list_follow)
+    LDS_init["time_int_list"] = time_int_list
+    LDS_init["fix_int"] = fix_int
+
+    # build F,H,R
+    D = dim * hyper_dict["R_U"]
+    LDS_init["R"] = torch.tensor(hyper_dict["noise"])
+    if hyper_dict["kernel"] == "Matern_21":
+        LDS_init["F"] = -1 / hyper_dict["lengthscale"] * torch.eye(D)
+        LDS_init["H"] = torch.eye(D)
+        LDS_init["P_inf"] = torch.eye(D)
+        LDS_init["P_0"] = LDS_init["P_inf"]
+        LDS_init["m_0"] = 0.1 * torch.ones(D, 1)
+
+    elif hyper_dict["kernel"] == "Matern_23":
+        lamb = np.sqrt(3) / hyper_dict["lengthscale"]
+
+        F = torch.zeros((2 * D, 2 * D))
+        F[:D, :D] = 0
+        F[:D, D:] = torch.eye(D)
+        F[D:, :D] = -lamb * lamb * torch.eye(D)
+        F[D:, D:] = -2 * lamb * torch.eye(D)
+
+        P_inf = torch.diag(
+            torch.cat(
+                (
+                    hyper_dict["variance"] * torch.ones(D),
+                    lamb * lamb * hyper_dict["variance"] * torch.ones(D),
+                )
+            )
+        )
+
+        LDS_init["F"] = F
+        LDS_init["P_inf"] = P_inf
+        LDS_init["H"] = torch.cat((torch.eye(D), torch.zeros(D, D)), dim=1)
+        LDS_init["P_0"] = LDS_init["P_inf"]
+        LDS_init["m_0"] = 0.1 * torch.ones(2 * D, 1)
+    else:
+        print("mis-kernel is to be done in the furture")
+    return LDS_init
+
+
+def parse_args_dynamic_CP():
+
+    description = "dynamic CP factorization"
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--R_U", type=int, default=5, help="dim of mode embeddings")
+    parser.add_argument(
+        "--num_fold",
+        type=int,
+        default=1,
+        help="number of folds(random split) and take average,min:1,max:5",
+    )
+    parser.add_argument(
+        "--fix_int",
+        type=int,
+        default=False,
+        help="whether timestamps are with fix interal",
+    )
+    parser.add_argument("--machine", type=str, default="zeus", help="machine_name")
+    return parser.parse_args()
 
 
 def build_time_data_table(time_ind):
@@ -28,20 +159,35 @@ def build_id_key_table(nmod, ind):
     # store the indices of obseved entries for each node of each mode
     data_table = []
 
-    for i in range(nmod):
-        values, inv_id = np.unique(ind[:, i], return_inverse=True)
-        uid_table.append(list(values))
+    if nmod > 1:
 
-        sub_data_table = []
+        for i in range(nmod):
+
+            values, inv_id = np.unique(ind[:, i], return_inverse=True)
+
+            uid_table.append(list(values))
+
+            sub_data_table = []
+            for j in range(len(values)):
+                data_id = np.argwhere(inv_id == j)
+                if len(data_id) > 1:
+                    data_id = data_id.squeeze().tolist()
+                else:
+                    data_id = [[data_id.squeeze().tolist()]]
+                sub_data_table.append(data_id)
+
+            data_table.append(sub_data_table)
+
+    else:
+        values, inv_id = np.unique(ind, return_inverse=True)
+        uid_table = list(values)
         for j in range(len(values)):
             data_id = np.argwhere(inv_id == j)
             if len(data_id) > 1:
                 data_id = data_id.squeeze().tolist()
             else:
                 data_id = [[data_id.squeeze().tolist()]]
-            sub_data_table.append(data_id)
-
-        data_table.append(sub_data_table)
+            data_table.append(data_id)
 
     return uid_table, data_table
 
@@ -377,17 +523,17 @@ def moment_Hadmard_T(
 
     last_mode = modes[-1]
 
-    diag_cov = True if U_v[0].size()[-2] == 1 else False
+    diag_cov = True if U_v_T[0].size()[-2] == 1 else False
 
-    R_U = U_v[0].size()[1]
+    R_U = U_v_T[0].size()[1]
 
     if order == "first":
         # only compute the first order moment
 
-        E_z = U_m[last_mode][ind[:, last_mode], :, :, tid]  # N*R_u*1
+        E_z = U_m_T[last_mode][ind[:, last_mode], :, :, ind_T]  # N*R_u*1
 
         for mode in reversed(modes[:-1]):
-            E_u = U_m[mode][ind[:, mode], :, :, tid]  # N*R_u*1
+            E_u = U_m_T[mode][ind[:, mode], :, :, ind_T]  # N*R_u*1
             E_z = Hadamard_product_batch(E_z, E_u)  # N*R_u*1
 
         return E_z.sum(dim=1) if sum_2_scaler else E_z
@@ -395,36 +541,36 @@ def moment_Hadmard_T(
     elif order == "second":
         # compute the second order moment E_z / E_z_2
 
-        E_z = U_m[last_mode][ind[:, last_mode], :, :, tid]  # N*R_u*1
+        E_z = U_m_T[last_mode][ind[:, last_mode], :, :, ind_T]  # N*R_u*1
 
         if diag_cov:
             # diagnal cov
             E_z_2 = torch.diag_embed(
-                U_v[last_mode][ind[:, last_mode], :, :, tid].squeeze(), dim1=1
+                U_v_T[last_mode][ind[:, last_mode], :, :, ind_T].squeeze(), dim1=1
             ) + torch.bmm(
                 E_z, E_z.transpose(dim0=1, dim1=2)
             )  # N*R_u*R_U
 
         else:
             # full cov
-            E_z_2 = U_v[last_mode][ind[:, last_mode], :, :, tid] + torch.bmm(
+            E_z_2 = U_v_T[last_mode][ind[:, last_mode], :, :, ind_T] + torch.bmm(
                 E_z, E_z.transpose(dim0=1, dim1=2)
             )  # N*R_u*R_U
 
         for mode in reversed(modes[:-1]):
 
-            E_u = U_m[mode][ind[:, mode], :, :, tid]  # N*R_u*1
+            E_u = U_m_T[mode][ind[:, mode], :, :, ind_T]  # N*R_u*1
 
             if diag_cov:
 
                 E_u_2 = torch.diag_embed(
-                    U_v[mode][ind[:, mode], :, :, tid].squeeze(), dim1=1
+                    U_v_T[mode][ind[:, mode], :, :, ind_T].squeeze(), dim1=1
                 ) + torch.bmm(
                     E_u, E_u.transpose(dim0=1, dim1=2)
                 )  # N*R_u*R_U
 
             else:
-                E_u_2 = U_v[mode][ind[:, last_mode], :, :, tid] + torch.bmm(
+                E_u_2 = U_v_T[mode][ind[:, last_mode], :, :, ind_T] + torch.bmm(
                     E_u, E_u.transpose(dim0=1, dim1=2)
                 )  # N*R_u*R_U
 
