@@ -119,7 +119,6 @@ class LDS_dynammic_streaming:
 
         current_time_stamp = self.time_uni[T]
 
-        # OPT: this operation could be parallized by using multi-process easily, but keep the dump loop at first
         for mode in range(self.nmods):
             for uid in self.uid_table[mode]:
                 self.traj_class[mode][uid].filter_predict(current_time_stamp)
