@@ -1,12 +1,12 @@
 """
-Implementation of Streaming Factor Trajectory for Dynamic Tensor, current is CP version, to be extend to Tucker 
+Implementation of Streaming Factor Trajectory for Dynamic Tensor, current is CP version, to be extended to Tucker 
 
 The key differences of the idea and current one is: 
 1. Build independent Trajectory Class (LDS-GP) for each embedding
 2. Streaming update (one (batch) llk -> multi-msg to multi LDS -> filter_update simultaneously-> finally smooth back) 
 
 draft link: https://www.overleaf.com/project/6363a960485a46499baef800
-Authod: Shikai Fang
+Author: Shikai Fang
 SLC, Utah, 2022.11
 """
 
@@ -18,6 +18,7 @@ from model_LDS import LDS_GP_streaming
 import os
 import tqdm
 import utils_streaming
+import bisect
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 JITTER = 1e-4
@@ -92,11 +93,14 @@ class LDS_dynammic_streaming:
             self.test_time_ind
         )
 
-        # place holder, will be updated at (track_envloved_object) at each time step
+        # place holders
         self.ind_T = None
         self.y_T = None
         self.uid_table = None
         self.data_table = None
+
+        self.msg_U_m = None
+        self.msg_U_V = None
 
     def track_envloved_objects(self, T):
 
@@ -124,90 +128,176 @@ class LDS_dynammic_streaming:
                 self.traj_class[mode][uid].filter_predict(current_time_stamp)
 
                 # update the posterior based on the prediction state
-                """double check, need mul observed-mat to change shape"""
-                self.post_U_m[mode][uid, :, :, T] = self.traj_class[mode][
-                    uid
-                ].m_pred_list[-1]
-
-                self.post_U_v[mode][uid, :, :, T] = self.traj_class[mode][
-                    uid
-                ].P_pred_list[-1]
+                H = self.traj_class[mode][uid].H
+                m = self.traj_class[mode][uid].m_pred_list[-1]
+                P = self.traj_class[mode][uid].P_pred_list[-1]
+                self.post_U_m[mode][uid, :, :, T] = torch.mm(H, m)
+                self.post_U_v[mode][uid, :, :, T] = torch.mm(torch.mm(H, P), H.T)
 
     def msg_approx(self, T):
-        # init the msg_U_M, msg_U_V
-        size_long_vec = self.R_U * self.ndims[mode]  # * self.FACTOR
-        self.msg_U_M = torch.zeros(size_long_vec, 1).to(self.device)
-        self.msg_U_V = torch.diag(1e6 * torch.ones(size_long_vec)).to(self.device)
+        """approx the msg from the group of data-llk at T"""
 
-        # retrive the observed entries at T
-        eind_T = self.time_data_table_tr[
-            T
-        ]  # list of observed entries id at this time-stamp
-        N_T = len(eind_T)
-        ind_T = self.ind_tr[eind_T]
-        y_T = self.y_tr[eind_T].reshape(-1, 1, 1)
+        # reste msg_U_m, msg_U_V
 
-        condi_modes = [i for i in range(self.nmods)]
-        condi_modes.remove(mode)
+        self.msg_U_m = []
+        self.msg_U_V = []
 
-        uid_table, data_table = utils_streaming.build_id_key_table(
-            nmod=1, ind=ind_T[:, mode]
-        )  # get the id of associated nodes at current mode
+        for mode in range(self.nmods):
+            msg_U_m_mode = []
+            msg_U_V_mode = []
 
-        E_z, E_z_2 = utils_streaming.moment_Hadmard(
-            modes=condi_modes,
-            ind=ind_T,
-            U_m=[ele[:, :, :, T] for ele in self.post_U_m],
-            U_v=[ele[:, :, :, T] for ele in self.post_U_v],
-            order="second",
-            sum_2_scaler=False,
-            device=self.device,
-        )
+            condi_modes = [i for i in range(self.nmods)]
+            condi_modes.remove(mode)
+            E_z, E_z_2 = utils_streaming.moment_Hadmard(
+                modes=condi_modes,
+                ind=self.ind_T,
+                U_m=[ele[:, :, :, T] for ele in self.post_U_m],
+                U_v=[ele[:, :, :, T] for ele in self.post_U_v],
+                order="second",
+                sum_2_scaler=False,
+                device=self.device,
+            )
 
-        # use the nature-paras first, convinient to merge msg later
-        S_inv = self.E_tau * E_z_2  # (N,R,R)
-        S_inv_Beta = y_T * E_z  # (N,R,1)
+            # use the nature-paras first, convinient to merge msg later
+            S_inv = self.E_tau * E_z_2  # (N,R,R)
+            S_inv_Beta = self.y_T * E_z  # (N,R,1)
 
-        # filling the msg_U_M, msg_U_V
-        for i in range(len(uid_table)):
-            uid = uid_table[i]  # id of embedding
-            eid = data_table[i]  # id of associated entries
+            # filling the msg_U_M, msg_U_V
+            for i in range(len(self.uid_table[mode])):
+                uid = self.uid_table[mode][i]  # id of embedding
+                eid = self.data_table[mode][i]  # id of associated entries
 
-            idx_start = uid * self.R_U
-            idx_end = (uid + 1) * self.R_U
+                U_V = torch.linalg.inv(
+                    S_inv[eid].sum(dim=0)
+                    + (1.0 / self.v) * torch.eye(self.R_U).to(self.device)
+                )  # (R,R)
+                U_M = torch.mm(U_V, S_inv_Beta[eid].sum(dim=0))  # (R,1)
 
-            U_V = torch.linalg.inv(
-                S_inv[eid].sum(dim=0)
-                + (1.0 / self.v) * torch.eye(self.R_U).to(self.device)
-            )  # (R,R)
-            U_M = torch.mm(U_V, S_inv_Beta[eid].sum(dim=0))  # (R,1)
+                msg_U_m_mode.append(U_M)
+                msg_U_V_mode.appned(U_V)
 
-            self.msg_U_V[idx_start:idx_end, idx_start:idx_end] = U_V
-            self.msg_U_M[idx_start:idx_end] = U_M
+            self.msg_U_m.append(msg_U_m_mode)
+            self.msg_U_V.append(msg_U_V_mode)
 
-    def post_update_U(self, mode):
-        # update post. of U based on latest results from RTS-smoother
+    def filter_update(self, T):
+        """trajectories of involved objects take KF update step"""
+        for mode in range(self.nmods):
+            for msg_id, uid in enumerate(self.uid_table[mode]):
 
-        LDS = self.LDS_list[mode]
-        H = LDS.H
-        dim = self.ndims[mode]
+                # we treat the approx msg as the observation values for KF
+                y = self.msg_U_m[mode][msg_id]
+                R = self.msg_U_V[mode][msg_id]
 
-        for t in range(self.N_time):
-            vec_U_M = torch.mm(H, LDS.m_smooth_list[t])  # (dim*R_U,1)
-            vec_U_V = torch.mm(
-                H, torch.mm(LDS.P_smooth_list[t], H.T)
-            )  # (dim*R_U,dim*R_U)
+                # KF update step
+                self.traj_class[mode][uid].filter_update(y=y, R=R)
 
-            self.post_U_m[mode][:, :, 0, t] = vec_U_M.reshape(dim, self.R_U)
-            # self.post_U_v[mode][:,:,:,t] = vec_U_M.reshape(dim,self.R_U) # hard to extract block mats, use for-loop
+                # update the posterior? -- no need
 
-            for j in range(dim):
+    def smooth(self):
+        """smooth back for all objects"""
+        for mode in range(self.nmods):
+            for uid in range(self.ndims[mode]):
+                self.traj_class[mode][uid].smooth()
 
-                idx_start = j * self.R_U
-                idx_end = (j + 1) * self.R_U
-                self.post_U_v[mode][j, :, :, t] = vec_U_V[
-                    idx_start:idx_end, idx_start:idx_end
-                ]
+    def get_post_U(self):
+        """get the final post of U using the smoothed result"""
+        for T, time_stamp in enumerate(self.time_uni):
+            for mode in range(self.nmods):
+                for uid in range(self.ndims[mode]):
+                    traj = self.traj_class[mode][uid]
+
+                    if time_stamp in traj.time_stamp_list:
+                        # the time_stamp appread before
+
+                        T_id = traj.time_2_ind_table[time_stamp]
+                        # update the posterior based on the smoothed state
+
+                        H = traj.H
+                        m = traj.m_smooth_list[T_id]
+                        P = traj.P_smooth_list[T_id]
+
+                        self.post_U_m[mode][uid, :, :, T] = torch.mm(H, m)
+                        self.post_U_v[mode][uid, :, :, T] = torch.mm(
+                            torch.mm(H, P), H.T
+                        )
+
+                    else:
+                        # the time_stamp never appread before
+                        print("the time_stamp never appread before")
+
+                        # locate the place of un-seen time_stamp
+                        loc = bisect.bisect(traj.time_stamp_list, time_stamp)
+
+                        if loc < len(traj.time_stamp_list):
+                            # interpolation, merge (follow formulas 10-13 in draft)
+
+                            prev_time_stamp = traj.time_stamp_list[loc - 1]
+                            next_time_stamp = traj.time_stamp_list[loc]
+
+                            prev_m = traj.m_smooth_list[loc - 1]
+                            prev_P = traj.P_smooth_list[loc - 1]
+
+                            next_m = traj.m_smooth_list[loc]
+                            next_P = traj.P_smooth_list[loc]
+
+                            prev_time_int = time_stamp - prev_time_stamp
+                            next_time_int = next_time_stamp - time_stamp
+
+                            prev_A = torch.matrix_exp(traj.F * prev_time_int).double()
+                            prev_Q = traj.P_inf - torch.mm(
+                                torch.mm(prev_A, traj.P_inf), prev_A.T
+                            )
+
+                            Q1_inv = torch.inverse(
+                                torch.mm(torch.mm(prev_A, prev_P), prev_A.T) + prev_Q
+                            )
+
+                            next_A = torch.matrix_exp(traj.F * next_time_int).double()
+                            next_Q = traj.P_inf - torch.mm(
+                                torch.mm(next_A, traj.P_inf), next_A.T
+                            )
+
+                            Q2_inv = torch.inverse(
+                                torch.mm(torch.mm(next_A, next_P), next_A.T) + next_Q
+                            )
+
+                            merge_P = torch.inverse(
+                                Q1_inv + torch.mm(next_A.T, torch.mm(Q2_inv, next_A))
+                            )
+
+                            temp_term = torch.mm(
+                                Q1_inv, torch.mm(prev_A, prev_m)
+                            ) + torch.mm(Q2_inv, torch.mm(next_A, next_m))
+                            merge_m = torch.mm(merge_P, temp_term)
+
+                            H = traj.H
+                            self.post_U_m[mode][uid, :, :, T] = torch.mm(H, merge_m)
+                            self.post_U_v[mode][uid, :, :, T] = torch.mm(
+                                torch.mm(H, merge_P), H.T
+                            )
+
+                        else:
+                            # extrapolation, gauss jump
+                            prev_time_stamp = traj.time_stamp_list[loc - 1]
+                            prev_m = traj.m_smooth_list[loc - 1]
+                            prev_P = traj.P_smooth_list[loc - 1]
+                            prev_time_int = time_stamp - prev_time_stamp
+
+                            prev_A = torch.matrix_exp(traj.F * prev_time_int).double()
+                            prev_Q = traj.P_inf - torch.mm(
+                                torch.mm(prev_A, traj.P_inf), prev_A.T
+                            )
+
+                            jump_m = torch.mm(prev_A, prev_m)
+                            jump_P = torch.inverse(
+                                torch.mm(torch.mm(prev_A, prev_P), prev_A.T) + prev_Q
+                            )
+
+                            H = traj.H
+                            self.post_U_m[mode][uid, :, :, T] = torch.mm(H, jump_m)
+                            self.post_U_v[mode][uid, :, :, T] = torch.mm(
+                                torch.mm(H, jump_P), H.T
+                            )
 
     def model_test(self, test_ind, test_y, test_time):
 
