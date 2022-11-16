@@ -1,6 +1,7 @@
 import numpy as np
 import torch
-import utils
+
+# import utils
 import scipy
 from scipy import linalg
 import argparse
@@ -249,7 +250,7 @@ def generate_state_space_Matern_23(data_dict, hyper_dict):
 
     # F = torch.zeros((2*D, 2*D), device=data_dict['device'])
     F = np.zeros((2 * D, 2 * D))
-    F[:D, :D] = utils.generate_Lapla(ndims, ind) * c
+    F[:D, :D] = generate_Lapla(ndims, ind) * c
     F[:D, D:] = np.eye(D)
     F[D:, :D] = -np.square(lamb) * np.eye(D)
     F[D:, D:] = -2 * lamb * np.eye(D)
