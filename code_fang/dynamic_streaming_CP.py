@@ -1,7 +1,7 @@
 import numpy as numpy
 import torch
 from model_dynamic_streaming_CP import LDS_dynammic_streaming
-import utils
+import utils_streaming
 import tqdm
 import yaml
 
@@ -16,8 +16,8 @@ data_path = "../processed_data/beijing_15k.npy"
 
 # prepare hyper_dict and data_dict
 
-hyper_dict = utils.make_hyper_dict(config, args)
-data_dict = utils.make_data_dict(config, args, hyper_dict)
+hyper_dict = utils_streaming.make_hyper_dict(config, args)
+data_dict = utils_streaming.make_data_dict(config, args, hyper_dict)
 
 # model
 model = LDS_dynammic_streaming(hyper_dict, data_dict)
@@ -46,4 +46,4 @@ model.smooth()
 model.get_final_U()
 
 test_result = model.test()
-utils.make_log(test_result)
+utils_streaming.make_log(test_result)
