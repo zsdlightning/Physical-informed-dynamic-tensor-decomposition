@@ -1,4 +1,4 @@
-'''
+"""
 Implementation of Streaming Factor Trajectory for Dynamic Tensor, current is CP version, to be extend to Tucker 
 
 The key differences of the idea and current one is: 
@@ -8,7 +8,7 @@ The key differences of the idea and current one is:
 draft link: https://www.overleaf.com/project/6363a960485a46499baef800
 Authod: Shikai Fang
 SLC, Utah, 2022.11
-'''
+"""
 
 import numpy as np
 from numpy.lib import utils
@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from model_LDS import LDS_GP_streaming
 import os
 import tqdm
-import utils
+import utils_streaming
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 JITTER = 1e-4
@@ -59,14 +59,12 @@ class LDS_dynammic_streaming:
         # build dynamics (LDS-GP class) for each object in each mode (store using nested list)
         self.traj_class = []
         for mode in range(self.nmods):
-            traj_class_mode = [LDS_GP_streaming(hyper_dict) for dim in self.ndims]
+            traj_class_mode = [
+                LDS_GP_streaming(hyper_dict) for i in range(self.ndims[mode])
+            ]
             self.traj_class.append(traj_class_mode)
 
-
-        # LDS_init_list = data_dict["LDS_init_list"]
-        # self.LDS_list = [LDS_GP(LDS_init_list[i]) for i in range(self.nmods)]
-
-        # posterior
+        # posterior: store the most recently posterior from LDS for fast test?
         self.post_U_m = [
             torch.randn(dim, self.R_U, 1, self.N_time).double().to(self.device)
             for dim in self.ndims
@@ -87,10 +85,56 @@ class LDS_dynammic_streaming:
         self.msg_U_V = None
 
         # build time-data table: Given a time-stamp id, return the indexed of entries
-        self.time_data_table_tr = utils.build_time_data_table(self.train_time_ind)
-        self.time_data_table_te = utils.build_time_data_table(self.test_time_ind)
+        self.time_data_table_tr = utils_streaming.build_time_data_table(
+            self.train_time_ind
+        )
+        self.time_data_table_te = utils_streaming.build_time_data_table(
+            self.test_time_ind
+        )
 
-    def msg_update_U(self, mode, T):
+        # place holder, will be updated at (track_envloved_object) at each time step
+        self.ind_T = None
+        self.y_T = None
+        self.uid_table = None
+        self.data_table = None
+
+    def track_envloved_objects(self, T):
+
+        """retrive the index/values/object-id of observed entries at T"""
+
+        eind_T = self.time_data_table_tr[
+            T
+        ]  # list of observed entries id at this time-stamp
+
+        self.ind_T = self.ind_tr[eind_T]
+        self.y_T = self.y_tr[eind_T].reshape(-1, 1, 1)
+
+        self.uid_table, self.data_table = utils_streaming.build_id_key_table(
+            nmod=self.nmods, ind=self.ind_T
+        )  # nested-list of observed objects (and their associated entrie) at this time-stamp
+
+    def filter_predict(self, T):
+
+        """trajectories of involved objects take KF prediction step + update the posterior"""
+
+        current_time_stamp = self.time_uni[T]
+
+        # OPT: this operation could be parallized by using multi-process easily, but keep the dump loop at first
+        for mode in range(self.nmods):
+            for uid in self.uid_table[mode]:
+                self.traj_class[mode][uid].filter_predict(current_time_stamp)
+
+                # update the posterior based on the prediction state
+                """double check, need mul observed-mat to change shape"""
+                self.post_U_m[mode][uid, :, :, T] = self.traj_class[mode][
+                    uid
+                ].m_pred_list[-1]
+
+                self.post_U_v[mode][uid, :, :, T] = self.traj_class[mode][
+                    uid
+                ].P_pred_list[-1]
+
+    def msg_approx(self, T):
         # init the msg_U_M, msg_U_V
         size_long_vec = self.R_U * self.ndims[mode]  # * self.FACTOR
         self.msg_U_M = torch.zeros(size_long_vec, 1).to(self.device)
@@ -107,11 +151,11 @@ class LDS_dynammic_streaming:
         condi_modes = [i for i in range(self.nmods)]
         condi_modes.remove(mode)
 
-        uid_table, data_table = utils.build_id_key_table(
+        uid_table, data_table = utils_streaming.build_id_key_table(
             nmod=1, ind=ind_T[:, mode]
         )  # get the id of associated nodes at current mode
 
-        E_z, E_z_2 = utils.moment_Hadmard(
+        E_z, E_z_2 = utils_streaming.moment_Hadmard(
             modes=condi_modes,
             ind=ind_T,
             U_m=[ele[:, :, :, T] for ele in self.post_U_m],
@@ -173,7 +217,7 @@ class LDS_dynammic_streaming:
 
         tid = test_time
 
-        pred = utils.moment_Hadmard_T(
+        pred = utils_streaming.moment_Hadmard_T(
             modes=all_modes,
             ind=test_ind,
             ind_T=tid,

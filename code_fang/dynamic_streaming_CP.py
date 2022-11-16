@@ -1,6 +1,6 @@
 import numpy as numpy
 import torch
-from model_dynamic_CP import LDS_dynammic_CP
+from model_dynamic_streaming_CP import LDS_dynammic_streaming
 import utils
 import tqdm
 import yaml
@@ -20,29 +20,30 @@ hyper_dict = utils.make_hyper_dict(config, args)
 data_dict = utils.make_data_dict(config, args, hyper_dict)
 
 # model
-model = LDS_dynammic_CP(hyper_dict, data_dict)
+model = LDS_dynammic_streaming(hyper_dict, data_dict)
 
 
-# psudo code to update
-for i in tqdm.tqdm(range(args.epoch)):
+for T in range(model.N_time):
 
-    for mode in range(model.nmods):
+    # track the id of envloved objects, will be used in next steps
+    model.track_envloved_objects(T)
 
-        model.LDS_list[mode].reset_list()
+    # KF prediction step: trajectories of involved objects take Gaussian Jump + update the posterior
+    model.filter_predict(T)
 
-        for k in range(model.N_time):
+    # approx the msg from the group of data-llk at T
+    model.msg_approx(T)
 
-            # update model.msg_U_M, model.msg_U_V : compute Ez, Ez2, get \beta, S, emseble to long vec msg_U
-            model.msg_update_U(mode, k)
-
-            # Kalman Filter: predict and update
-            model.LDS_list[mode].filter_predict(ind=k)
-            model.LDS_list[mode].filter_update(y=model.msg_U_M, R=model.msg_U_V)
-
-        model.LDS_list[mode].smooth()
-
-        model.post_update_U(mode)
+    # KF update step: merge prediction-states of KF & data-llk-msg + update the posterior
+    model.filter_update(T)
 
     test_result = model.test()
 
+# RTS-smooth-step
+model.smooth()
+
+# get the final posterior of U using the smooth-state of LDS
+model.get_final_U()
+
+test_result = model.test()
 utils.make_log(test_result)
