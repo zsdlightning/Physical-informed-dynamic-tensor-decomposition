@@ -47,11 +47,56 @@ def make_data_dict(hyper_dict, data_path, fold=0, args=None):
     # data_dict["fix_int"] = args.fix_int
     data_dict["fix_int"] = hyper_dict["fix_int"]
 
-    data_dict["LDS_init_list"] = [
-        make_LDS_paras(dim, hyper_dict, data_dict) for dim in data_dict["ndims"]
-    ]
+    data_dict["LDS_streaming_paras"] = make_LDS_streaming_paras(hyper_dict, data_dict)
+
+    # data_dict["LDS_init_list"] = [
+    #     make_LDS_paras(dim, hyper_dict, data_dict) for dim in data_dict["ndims"]
+    # ]
 
     return data_dict
+
+
+def make_LDS_streaming_paras(hyper_dict, data_dict):
+    LDS_init = {}
+    LDS_init["device"] = hyper_dict["device"]
+
+    # build F,H,R
+    D = hyper_dict["R_U"]
+
+    LDS_init["R"] = torch.tensor(hyper_dict["noise"])
+    if hyper_dict["kernel"] == "Matern_21":
+        LDS_init["F"] = -1 / hyper_dict["lengthscale"] * torch.eye(D)
+        LDS_init["H"] = torch.eye(D)
+        LDS_init["P_inf"] = torch.eye(D)
+        LDS_init["P_0"] = LDS_init["P_inf"]
+        LDS_init["m_0"] = 0.1 * torch.randn(D, 1)
+
+    elif hyper_dict["kernel"] == "Matern_23":
+        lamb = np.sqrt(3) / hyper_dict["lengthscale"]
+
+        F = torch.zeros((2 * D, 2 * D))
+        F[:D, :D] = 0
+        F[:D, D:] = torch.eye(D)
+        F[D:, :D] = -lamb * lamb * torch.eye(D)
+        F[D:, D:] = -2 * lamb * torch.eye(D)
+
+        P_inf = torch.diag(
+            torch.cat(
+                (
+                    hyper_dict["variance"] * torch.ones(D),
+                    lamb * lamb * hyper_dict["variance"] * torch.ones(D),
+                )
+            )
+        )
+
+        LDS_init["F"] = F
+        LDS_init["P_inf"] = P_inf
+        LDS_init["H"] = torch.cat((torch.eye(D), torch.zeros(D, D)), dim=1)
+        LDS_init["P_0"] = LDS_init["P_inf"]
+        LDS_init["m_0"] = 0.1 * torch.ones(2 * D, 1)
+    else:
+        print("mis-kernel is to be done in the furture")
+    return LDS_init
 
 
 def make_LDS_paras(dim, hyper_dict, data_dict):

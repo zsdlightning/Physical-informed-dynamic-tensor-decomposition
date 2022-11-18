@@ -2,7 +2,7 @@
 # config: hyper paras
 
 
-device: 'cuda'
+device: 'cpu' #cuda'
 epoch: 100
 data_path: '../processed_data/beijing_15k.npy'
 
@@ -14,7 +14,7 @@ fold: 1 # number of folds(random split) and take average,min:1,max:5'
 fix_int: True
 time_type: "continues" # is the time-step continues or discrete? 
 
-kernel: "Matern_23" # GP kernel type, Matern_21 or Matern_23"
-lengthscale: 0.1 # lengthscale of kernel= torch.tensor(args.ls)
-variance: 1.0 # var of kernel 
+kernel: "Matern_21" # GP kernel type, Matern_21 or Matern_23"
+lengthscale: 10 # lengthscale of kernel= torch.tensor(args.ls)
+variance: 1 # var of kernel 
 noise: 0.1 # obvs_noise of KF, will not be used actully  

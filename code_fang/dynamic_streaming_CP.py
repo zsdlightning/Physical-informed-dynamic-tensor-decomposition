@@ -37,7 +37,7 @@ for T in range(model.N_time):
     # KF update step: merge prediction-states of KF & data-llk-msg + update the posterior
     model.filter_update(T)
 
-    test_result = model.test()
+    # test_result = model.test()
 
 # RTS-smooth-step
 model.smooth()
