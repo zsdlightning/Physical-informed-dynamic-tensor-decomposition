@@ -57,11 +57,13 @@ class LDS_dynammic_streaming:
         self.time_uni = data_dict["time_uni"]  # N_time*1
         self.N_time = len(self.time_uni)
 
+        LDS_streaming_paras = data_dict["LDS_streaming_paras"]
+
         # build dynamics (LDS-GP class) for each object in each mode (store using nested list)
         self.traj_class = []
         for mode in range(self.nmods):
             traj_class_mode = [
-                LDS_GP_streaming(hyper_dict) for i in range(self.ndims[mode])
+                LDS_GP_streaming(LDS_streaming_paras) for i in range(self.ndims[mode])
             ]
             self.traj_class.append(traj_class_mode)
 
@@ -174,7 +176,7 @@ class LDS_dynammic_streaming:
                 U_M = torch.mm(U_V, S_inv_Beta[eid].sum(dim=0))  # (R,1)
 
                 msg_U_m_mode.append(U_M)
-                msg_U_V_mode.appned(U_V)
+                msg_U_V_mode.append(U_V)
 
             self.msg_U_m.append(msg_U_m_mode)
             self.msg_U_V.append(msg_U_V_mode)
@@ -223,7 +225,7 @@ class LDS_dynammic_streaming:
 
                     else:
                         # the time_stamp never appread before
-                        print("the time_stamp never appread before")
+                        print("the time_stamp:", time_stamp, " never appread before")
 
                         # locate the place of un-seen time_stamp
                         loc = bisect.bisect(traj.time_stamp_list, time_stamp)
@@ -322,3 +324,8 @@ class LDS_dynammic_streaming:
         )
 
         return loss_test_base
+
+    def reset(self):
+        for mode in range(self.nmods):
+            for uid in range(self.ndims[mode]):
+                self.traj_class[mode][uid].reset_list()

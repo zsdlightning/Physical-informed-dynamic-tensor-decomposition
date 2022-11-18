@@ -191,7 +191,9 @@ class LDS_GP_streaming:
         self.A = None
         self.Q = None
 
-        self.m_0 = hyper_para_dict["m_0"].double().to(self.device)  # init mean
+        # self.m_0 = hyper_para_dict["m_0"].double().to(self.device)  # init mean
+        self.D = hyper_para_dict["m_0"].shape[0]
+        self.m_0 = torch.randn(self.D, 1).double().to(self.device)
         self.P_0 = hyper_para_dict["P_0"].double().to(self.device)  # init var
 
         # keep update during the forward pass
@@ -215,10 +217,19 @@ class LDS_GP_streaming:
         self.m_smooth_list = []  # store the smoothed state(mean)
         self.P_smooth_list = []  # store the smoothed state(mean)
 
+        self.current_time_stamp = 0.0
+        self.time_int_list = []
+        self.time_stamp_list = []
+        self.time_2_ind_table = {}
+
     def filter_predict(self, time_stamp):
 
         time_int = time_stamp - self.current_time_stamp
         self.A = torch.matrix_exp(self.F * time_int).double()
+
+        """test: identify trans"""
+        self.A = torch.eye(self.D).double()
+
         self.Q = self.P_inf - torch.mm(torch.mm(self.A, self.P_inf), self.A.T)
 
         self.m = torch.mm(self.A, self.m).double()
@@ -268,6 +279,9 @@ class LDS_GP_streaming:
 
             time_int = self.time_int_list[i + 1]
             A = torch.matrix_exp(self.F * time_int)
+            """test: identify trans"""
+            self.A = torch.eye(self.D).double()
+
             # A = self.A_list[i+1]
 
             G = torch.mm(torch.mm(P, A.T), torch.linalg.pinv(P_pred))
